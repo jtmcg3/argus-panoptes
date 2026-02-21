@@ -3,6 +3,7 @@
 use crate::config::CoordinatorConfig;
 use crate::pty_client::PtyMcpClient;
 use crate::routing::{AgentRoute, PermissionMode, RouteDecision};
+use crate::zeroclaw_triage::ZeroClawTriageAgent;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,11 +12,13 @@ use tracing::{debug, error, info, warn};
 
 /// The main coordinator that orchestrates all agents.
 ///
-/// Uses ZeroClaw for intelligent triage and routing decisions.
+/// Uses ZeroClaw for intelligent triage and routing decisions when configured
+/// with an OpenAI provider. Falls back to keyword-based routing otherwise.
 pub struct Coordinator {
     config: CoordinatorConfig,
-    // TODO: ZeroClaw integration
-    // zeroclaw: zeroclaw::Agent,
+
+    /// ZeroClaw triage agent (if OpenAI is configured)
+    triage_agent: Option<RwLock<ZeroClawTriageAgent>>,
 
     // Active tasks being coordinated
     active_tasks: Arc<RwLock<Vec<Task>>>,
@@ -29,21 +32,51 @@ pub struct Coordinator {
 
 impl Coordinator {
     /// Create a new coordinator with the given configuration.
+    ///
+    /// If the provider is configured as "openai" and an API key is available,
+    /// ZeroClaw will be used for intelligent LLM-based triage. Otherwise,
+    /// keyword-based fallback routing is used.
     pub fn new(config: CoordinatorConfig) -> Result<Self> {
         info!("Initializing Panoptes coordinator");
 
-        // TODO: Initialize ZeroClaw with config
-        // let zeroclaw = zeroclaw::Agent::builder()
-        //     .provider(config.provider.provider_type)
-        //     .model(config.provider.model)
-        //     .build()?;
+        // Try to create ZeroClaw triage agent if OpenAI is configured
+        let triage_agent = if config.provider.provider_type == "openai" {
+            match ZeroClawTriageAgent::new(&config.provider) {
+                Ok(agent) => {
+                    info!(
+                        model = %config.provider.model,
+                        "ZeroClaw triage agent initialized with OpenAI"
+                    );
+                    Some(RwLock::new(agent))
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "Failed to initialize ZeroClaw triage, using keyword fallback"
+                    );
+                    None
+                }
+            }
+        } else {
+            info!(
+                provider = %config.provider.provider_type,
+                "Non-OpenAI provider configured, using keyword triage"
+            );
+            None
+        };
 
         Ok(Self {
             config,
+            triage_agent,
             active_tasks: Arc::new(RwLock::new(Vec::new())),
             pty_client: Arc::new(RwLock::new(None)),
             session_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
+    }
+
+    /// Check if ZeroClaw triage is available.
+    pub fn has_zeroclaw_triage(&self) -> bool {
+        self.triage_agent.is_some()
     }
 
     /// Initialize and connect to the PTY-MCP server.
@@ -80,16 +113,42 @@ impl Coordinator {
     }
 
     /// Analyze a user message and decide which agent(s) should handle it.
+    ///
+    /// Uses ZeroClaw LLM-based routing if OpenAI is configured,
+    /// otherwise falls back to keyword-based routing.
     pub async fn triage(&self, message: &AgentMessage) -> Result<RouteDecision> {
         info!(
             message_id = %message.id,
             content_preview = %message.content.chars().take(50).collect::<String>(),
+            using_zeroclaw = self.triage_agent.is_some(),
             "Triaging message"
         );
 
-        // TODO: Use ZeroClaw for actual triage
-        // For now, implement keyword-based fallback
-        let decision = self.keyword_triage(&message.content).await?;
+        let decision = if let Some(ref agent_lock) = self.triage_agent {
+            // Use ZeroClaw for intelligent LLM-based routing
+            let mut agent = agent_lock.write().await;
+            match agent.triage(&message.content).await {
+                Ok(decision) => {
+                    debug!(
+                        route = ?decision.route,
+                        confidence = decision.confidence,
+                        "ZeroClaw triage decision"
+                    );
+                    decision
+                }
+                Err(e) => {
+                    // Fall back to keyword triage on ZeroClaw error
+                    warn!(
+                        error = %e,
+                        "ZeroClaw triage failed, falling back to keyword triage"
+                    );
+                    self.keyword_triage(&message.content).await?
+                }
+            }
+        } else {
+            // Use keyword-based fallback
+            self.keyword_triage(&message.content).await?
+        };
 
         debug!(
             route = ?decision.route,

@@ -5,6 +5,7 @@ members = [
     "crates/agents",
     "crates/memory",
     "crates/common",
+    "crates/api",
 ]
 resolver = "2"
 
@@ -22,6 +23,7 @@ panoptes-pty-mcp = { path = "crates/pty-mcp" }
 panoptes-agents = { path = "crates/agents" }
 panoptes-memory = { path = "crates/memory" }
 panoptes-common = { path = "crates/common" }
+panoptes-api = { path = "crates/api" }
 
 # External: ZeroClaw
 # Default: Use git repo for CI/portable builds

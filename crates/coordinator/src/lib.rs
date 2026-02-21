@@ -27,8 +27,10 @@ pub mod config;
 pub mod pty_client;
 pub mod routing;
 pub mod triage;
+pub mod zeroclaw_triage;
 
 pub use config::CoordinatorConfig;
+pub use zeroclaw_triage::ZeroClawTriageAgent;
 pub use pty_client::{PtyMcpClient, PtyMcpClientBuilder, ReadResult, SpawnResult, StatusResult};
 pub use routing::{AgentRoute, RouteDecision};
 pub use triage::Coordinator;

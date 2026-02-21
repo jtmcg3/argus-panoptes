@@ -33,6 +33,13 @@ pub struct ProviderConfig {
     #[serde(default = "default_ollama_url")]
     pub api_url: String,
 
+    /// API key for authentication (OpenAI, Anthropic)
+    /// If not set, will attempt to read from environment variables:
+    /// - OPENAI_API_KEY for OpenAI
+    /// - ANTHROPIC_API_KEY for Anthropic
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
     /// Timeout in milliseconds
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
@@ -100,6 +107,7 @@ impl Default for CoordinatorConfig {
                 provider_type: "ollama".into(),
                 model: "llama3.2".into(),
                 api_url: default_ollama_url(),
+                api_key: None,
                 timeout_ms: default_timeout(),
             },
             agents: HashMap::new(),
@@ -119,5 +127,32 @@ impl CoordinatorConfig {
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)
+    }
+}
+
+impl ProviderConfig {
+    /// Resolve the API key from config or environment variables.
+    ///
+    /// Priority:
+    /// 1. Explicit api_key in config
+    /// 2. Environment variable based on provider_type:
+    ///    - "openai" -> OPENAI_API_KEY
+    ///    - "anthropic" -> ANTHROPIC_API_KEY
+    pub fn resolve_api_key(&self) -> Option<String> {
+        // First check explicit config
+        if let Some(ref key) = self.api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+
+        // Fall back to environment variable based on provider type
+        let env_var = match self.provider_type.as_str() {
+            "openai" => "OPENAI_API_KEY",
+            "anthropic" => "ANTHROPIC_API_KEY",
+            _ => return None,
+        };
+
+        std::env::var(env_var).ok()
     }
 }

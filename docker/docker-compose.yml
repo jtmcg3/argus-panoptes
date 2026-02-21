@@ -1,26 +1,31 @@
 # Argus-Panoptes Docker Compose
-# Development and production deployment configurations
+# Production deployment with OpenAI/ChatGPT integration
 
 services:
-  # Core coordinator service
-  coordinator:
+  # API Gateway (primary entry point)
+  api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: panoptes-coordinator
+    container_name: panoptes-api
+    command: ["panoptes-api", "--port", "8080", "--config", "/app/config/config.toml"]
     environment:
-      - RUST_LOG=info,panoptes=debug
-      - PANOPTES_CONFIG=/app/config/config.toml
+      - RUST_LOG=info,panoptes=debug,tower_http=debug
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
     volumes:
       - ../config:/app/config:ro
       - panoptes-data:/app/data
     ports:
-      - "3000:3000"
-    depends_on:
-      - ollama
+      - "8080:8080"
     networks:
       - panoptes-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # PTY-MCP server (for Claude CLI execution)
   pty-mcp:
@@ -40,35 +45,35 @@ services:
     # Note: PTY requires privileged mode for terminal emulation
     privileged: true
 
-  # Ollama for local LLM inference
-  ollama:
-    image: ollama/ollama:latest
-    container_name: panoptes-ollama
-    volumes:
-      - ollama-models:/root/.ollama
-    ports:
-      - "11434:11434"
-    networks:
-      - panoptes-net
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  # LanceDB doesn't need a separate container (embedded)
-  # But we can add a dashboard/admin UI later
+  # Optional: Ollama for local LLM inference (fallback when OpenAI unavailable)
+  # Uncomment if you want local LLM support
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: panoptes-ollama
+  #   profiles:
+  #     - local-llm
+  #   volumes:
+  #     - ollama-models:/root/.ollama
+  #   ports:
+  #     - "11434:11434"
+  #   networks:
+  #     - panoptes-net
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
 
 volumes:
   panoptes-data:
     driver: local
-  ollama-models:
-    driver: local
   workspaces:
     driver: local
+  # ollama-models:
+  #   driver: local
 
 networks:
   panoptes-net:

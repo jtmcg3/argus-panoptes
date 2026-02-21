@@ -3,10 +3,17 @@
 
 [provider]
 # LLM provider for triage and coordination
-provider_type = "ollama"
-model = "llama3.2"
-api_url = "http://localhost:11434"
+# Recommended: OpenAI for intelligent ZeroClaw triage
+provider_type = "openai"
+model = "gpt-4o"
+api_url = "https://api.openai.com/v1"
 timeout_ms = 30000
+# api_key = "sk-..."  # Or set OPENAI_API_KEY environment variable
+
+# Alternative: Local Ollama (no API key required, uses keyword fallback)
+# provider_type = "ollama"
+# model = "llama3.2"
+# api_url = "http://localhost:11434"
 
 [agents.coding]
 # Coding agent configuration
