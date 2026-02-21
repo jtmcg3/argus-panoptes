@@ -9,6 +9,7 @@ description = "Specialist agents built on swarms-rs for research, writing, plann
 [dependencies]
 panoptes-common = { workspace = true }
 panoptes-memory = { workspace = true }
+panoptes-coordinator = { workspace = true }
 
 # Agent orchestration
 swarms-rs = { workspace = true }
@@ -31,3 +32,6 @@ tracing = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+
+# UUID generation
+uuid = { workspace = true }
