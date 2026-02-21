@@ -1,0 +1,32 @@
+[package]
+name = "panoptes-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LanceDB-backed memory system for Argus-Panoptes agents"
+
+[dependencies]
+panoptes-common = { workspace = true }
+
+# Vector database
+lancedb = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Embeddings (local model)
+# fastembed = "4"  # TODO: Add when ready

@@ -1,0 +1,33 @@
+[package]
+name = "panoptes-agents"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Specialist agents built on swarms-rs for research, writing, planning, and coding"
+
+[dependencies]
+panoptes-common = { workspace = true }
+panoptes-memory = { workspace = true }
+
+# Agent orchestration
+swarms-rs = { workspace = true }
+
+# MCP client (for calling tools)
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }

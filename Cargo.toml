@@ -1,0 +1,68 @@
+[workspace]
+members = [
+    "crates/coordinator",
+    "crates/pty-mcp",
+    "crates/agents",
+    "crates/memory",
+    "crates/common",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Jim McG"]
+license = "MIT"
+repository = "https://github.com/jtmcg3/argus-panoptes"
+
+[workspace.dependencies]
+# Local crates
+panoptes-coordinator = { path = "crates/coordinator" }
+panoptes-pty-mcp = { path = "crates/pty-mcp" }
+panoptes-agents = { path = "crates/agents" }
+panoptes-memory = { path = "crates/memory" }
+panoptes-common = { path = "crates/common" }
+
+# External: ZeroClaw (local fork)
+# NOTE: Commented out until zeroclaw fork is fixed (missing futures crate, duplicate chat fn)
+# zeroclaw = { path = "../zeroclaw" }
+
+# External: Argus PTY components (reference for extraction)
+# argus = { path = "../argus" }
+
+# Agent orchestration
+swarms-rs = "0.1"
+
+# MCP Protocol
+rmcp = "0.1"
+
+# Vector database
+lancedb = "0.15"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Configuration
+toml = "0.8"
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

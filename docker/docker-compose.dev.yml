@@ -1,0 +1,37 @@
+# Development overrides for docker-compose
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  coordinator:
+    build:
+      target: builder  # Use builder stage for faster iteration
+    volumes:
+      - ..:/app:cached  # Mount source for hot reload
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=debug,panoptes=trace
+    command: ["cargo", "watch", "-x", "run"]
+
+  pty-mcp:
+    build:
+      target: builder
+    volumes:
+      - ..:/app:cached
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    environment:
+      - RUST_BACKTRACE=1
+    command: ["cargo", "watch", "-x", "run --bin pty-mcp-server"]
+
+  ollama:
+    # Use CPU-only for development on machines without GPU
+    deploy:
+      resources:
+        reservations:
+          devices: []
+
+volumes:
+  cargo-cache:
+  target-cache:

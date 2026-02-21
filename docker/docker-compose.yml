@@ -1,0 +1,75 @@
+# Argus-Panoptes Docker Compose
+# Development and production deployment configurations
+
+services:
+  # Core coordinator service
+  coordinator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: panoptes-coordinator
+    environment:
+      - RUST_LOG=info,panoptes=debug
+      - PANOPTES_CONFIG=/app/config/config.toml
+    volumes:
+      - ../config:/app/config:ro
+      - panoptes-data:/app/data
+    ports:
+      - "3000:3000"
+    depends_on:
+      - ollama
+    networks:
+      - panoptes-net
+    restart: unless-stopped
+
+  # PTY-MCP server (for Claude CLI execution)
+  pty-mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: panoptes-pty-mcp
+    command: ["pty-mcp-server"]
+    environment:
+      - RUST_LOG=info,panoptes_pty_mcp=debug
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # For nested container execution
+      - workspaces:/workspaces
+    networks:
+      - panoptes-net
+    restart: unless-stopped
+    # Note: PTY requires privileged mode for terminal emulation
+    privileged: true
+
+  # Ollama for local LLM inference
+  ollama:
+    image: ollama/ollama:latest
+    container_name: panoptes-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - panoptes-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # LanceDB doesn't need a separate container (embedded)
+  # But we can add a dashboard/admin UI later
+
+volumes:
+  panoptes-data:
+    driver: local
+  ollama-models:
+    driver: local
+  workspaces:
+    driver: local
+
+networks:
+  panoptes-net:
+    driver: bridge

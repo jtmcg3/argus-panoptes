@@ -1,0 +1,63 @@
+# Argus-Panoptes Configuration
+# Copy to config.toml and customize
+
+[provider]
+# LLM provider for triage and coordination
+provider_type = "ollama"
+model = "llama3.2"
+api_url = "http://localhost:11434"
+timeout_ms = 30000
+
+[agents.coding]
+# Coding agent configuration
+agent_type = "pty-mcp"
+transport = "stdio"
+command = "pty-mcp-server"
+capabilities = ["code_generation", "code_execution"]
+requires_confirmation = true
+
+[agents.research]
+# Research agent configuration
+agent_type = "swarm"
+transport = "stdio"
+capabilities = ["web_search", "document_analysis"]
+
+[agents.writing]
+# Writing agent configuration
+agent_type = "swarm"
+transport = "stdio"
+capabilities = ["content_creation"]
+
+[agents.planning]
+# Planning agent configuration
+agent_type = "swarm"
+transport = "stdio"
+capabilities = ["task_planning"]
+
+[agents.review]
+# Code review agent configuration
+agent_type = "swarm"
+transport = "stdio"
+capabilities = ["code_review"]
+
+[agents.testing]
+# Testing agent configuration
+agent_type = "pty-mcp"
+transport = "stdio"
+command = "pty-mcp-server"
+capabilities = ["test_execution", "code_execution"]
+
+[memory]
+# LanceDB memory configuration
+db_path = "./data/memory"
+embedding_model = "all-MiniLM-L6-v2"
+max_context_tokens = 4096
+
+[memory.working]
+# Working memory settings
+size = 20  # Max items in hot memory
+
+# Directory mappings for project resolution
+[directories]
+argus = "/home/user/projects/argus"
+panoptes = "/home/user/projects/argus-panoptes"

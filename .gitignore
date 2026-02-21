@@ -1,0 +1,42 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Config (keep example)
+config/config.toml
+
+# Data directories
+data/
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+*.profraw
+*.profdata
+
+# Cargo
+Cargo.lock
+!Cargo.lock  # Keep for binary crates
+
+# Docker
+.docker/
