@@ -1,11 +1,13 @@
 //! Core coordinator implementation using ZeroClaw.
 
 use crate::config::CoordinatorConfig;
-use crate::routing::{AgentRoute, RouteDecision};
+use crate::pty_client::PtyMcpClient;
+use crate::routing::{AgentRoute, PermissionMode, RouteDecision};
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// The main coordinator that orchestrates all agents.
 ///
@@ -18,8 +20,11 @@ pub struct Coordinator {
     // Active tasks being coordinated
     active_tasks: Arc<RwLock<Vec<Task>>>,
 
-    // MCP client connections to agents
-    // agent_clients: HashMap<String, McpClient>,
+    // MCP client for PTY sessions
+    pty_client: Arc<RwLock<Option<PtyMcpClient>>>,
+
+    // Session counter for generating unique session IDs
+    session_counter: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Coordinator {
@@ -36,7 +41,42 @@ impl Coordinator {
         Ok(Self {
             config,
             active_tasks: Arc::new(RwLock::new(Vec::new())),
+            pty_client: Arc::new(RwLock::new(None)),
+            session_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
+    }
+
+    /// Initialize and connect to the PTY-MCP server.
+    ///
+    /// This must be called before executing PtyCoding routes.
+    /// The `server_binary` should be the path to the pty-mcp-server executable.
+    pub async fn connect_pty_server(&self, server_binary: Option<PathBuf>) -> Result<()> {
+        info!("Connecting to PTY-MCP server");
+
+        let client = PtyMcpClient::new(server_binary);
+        client.connect().await?;
+
+        *self.pty_client.write().await = Some(client);
+
+        info!("Successfully connected to PTY-MCP server");
+        Ok(())
+    }
+
+    /// Check if the PTY-MCP client is connected.
+    pub async fn is_pty_connected(&self) -> bool {
+        if let Some(ref client) = *self.pty_client.read().await {
+            client.is_connected().await
+        } else {
+            false
+        }
+    }
+
+    /// Generate a unique session ID.
+    fn generate_session_id(&self) -> String {
+        let counter = self
+            .session_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!("session-{}", counter)
     }
 
     /// Analyze a user message and decide which agent(s) should handle it.
@@ -188,16 +228,13 @@ impl Coordinator {
                 Ok(AgentMessage::from_agent("coordinator", response))
             }
 
-            AgentRoute::PtyCoding { instruction, working_dir, permission_mode } => {
-                // TODO: Call PTY-MCP agent via MCP
-                warn!("PTY-MCP agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!(
-                        "[TODO: Route to PTY-MCP agent]\nInstruction: {}\nWorking dir: {:?}\nMode: {:?}",
-                        instruction, working_dir, permission_mode
-                    ),
-                ))
+            AgentRoute::PtyCoding {
+                instruction,
+                working_dir,
+                permission_mode,
+            } => {
+                self.execute_pty_coding(&instruction, working_dir.as_deref(), permission_mode)
+                    .await
             }
 
             AgentRoute::Research { query, .. } => {
@@ -260,6 +297,126 @@ impl Coordinator {
     pub async fn process(&self, message: AgentMessage) -> Result<AgentMessage> {
         let decision = self.triage(&message).await?;
         self.execute(decision).await
+    }
+
+    /// Execute a PtyCoding route by spawning a Claude CLI session.
+    ///
+    /// This method:
+    /// 1. Ensures the PTY-MCP client is connected
+    /// 2. Spawns a new PTY session with the claude CLI
+    /// 3. Waits for initial output
+    /// 4. Returns the session info and initial output
+    async fn execute_pty_coding(
+        &self,
+        instruction: &str,
+        working_dir: Option<&str>,
+        permission_mode: PermissionMode,
+    ) -> Result<AgentMessage> {
+        // Check if PTY client is connected
+        let client_guard = self.pty_client.read().await;
+        let client = client_guard.as_ref().ok_or_else(|| {
+            PanoptesError::Mcp(
+                "PTY-MCP client not connected. Call connect_pty_server() first.".into(),
+            )
+        })?;
+
+        // Determine working directory
+        let work_dir = working_dir
+            .map(String::from)
+            .or_else(|| {
+                self.config
+                    .default_working_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+            })
+            .unwrap_or_else(|| ".".to_string());
+
+        // Generate a unique session ID
+        let session_id = self.generate_session_id();
+
+        info!(
+            session_id = %session_id,
+            instruction = %instruction,
+            working_dir = %work_dir,
+            permission_mode = ?permission_mode,
+            "Executing PtyCoding route"
+        );
+
+        // Build claude CLI arguments based on permission mode
+        let mut args = vec!["-p".to_string(), instruction.to_string()];
+
+        // Add permission mode flags
+        match permission_mode {
+            PermissionMode::Plan => {
+                // Default plan mode - Claude will ask for confirmation
+            }
+            PermissionMode::Act => {
+                // Act mode - dangerously allow all actions without confirmation
+                args.push("--dangerously-skip-permissions".to_string());
+            }
+        }
+
+        // Spawn the session
+        let spawn_result = client
+            .spawn_session(&session_id, "claude", &args, &work_dir)
+            .await?;
+
+        if !spawn_result.success {
+            let error_msg = spawn_result
+                .error
+                .unwrap_or_else(|| "Unknown error spawning session".into());
+            error!(session_id = %session_id, error = %error_msg, "Failed to spawn PTY session");
+            return Err(PanoptesError::Pty(error_msg));
+        }
+
+        info!(session_id = %session_id, "PTY session spawned successfully");
+
+        // Wait a bit for initial output
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Read initial output
+        let read_result = client.get_output(&session_id, false).await?;
+
+        // Build the response message with session info
+        let response = serde_json::json!({
+            "session_id": session_id,
+            "status": read_result.status,
+            "working_dir": work_dir,
+            "permission_mode": format!("{:?}", permission_mode),
+            "initial_output": read_result.output,
+            "awaiting_confirmation": read_result.awaiting_confirmation,
+            "instruction": instruction,
+        });
+
+        Ok(AgentMessage::from_agent("pty-mcp", response.to_string()))
+    }
+
+    /// Get the PTY-MCP client reference for direct session management.
+    ///
+    /// This allows callers to interact with active sessions (send input,
+    /// read output, confirm prompts, etc.) after the initial spawn.
+    pub async fn get_pty_client(&self) -> Result<impl std::ops::Deref<Target = PtyMcpClient> + '_> {
+        let guard = self.pty_client.read().await;
+        if guard.is_none() {
+            return Err(PanoptesError::Mcp(
+                "PTY-MCP client not connected. Call connect_pty_server() first.".into(),
+            ));
+        }
+        // We need to map the guard to access the inner value
+        // Using a wrapper that implements Deref
+        Ok(PtyClientRef(guard))
+    }
+}
+
+/// A reference wrapper that allows accessing the PtyMcpClient through a RwLockReadGuard.
+pub struct PtyClientRef<'a>(tokio::sync::RwLockReadGuard<'a, Option<PtyMcpClient>>);
+
+impl<'a> std::ops::Deref for PtyClientRef<'a> {
+    type Target = PtyMcpClient;
+
+    fn deref(&self) -> &Self::Target {
+        // Safe because we checked is_some() before returning
+        self.0.as_ref().unwrap()
     }
 }
 

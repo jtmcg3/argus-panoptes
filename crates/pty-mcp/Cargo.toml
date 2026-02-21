@@ -14,7 +14,8 @@ path = "src/bin/server.rs"
 panoptes-common = { workspace = true }
 
 # MCP Protocol
-rmcp = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }
+schemars = "0.8"
 
 # PTY management
 portable-pty = "0.8"

@@ -3,15 +3,15 @@
 //! This module provides the core session management logic, adapted from
 //! the argus project's shell module.
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, SlavePty};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, LazyLock};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Whitelist of allowed commands for PTY sessions (SEC-001).
 /// Commands not in this list will be rejected to prevent command injection.
@@ -102,6 +102,8 @@ pub enum OutputEvent {
 pub struct PtySession {
     id: String,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    slave: Arc<Mutex<Option<Box<dyn SlavePty + Send>>>>,
+    child: Arc<Mutex<Option<Box<dyn Child + Send + Sync>>>>,
     working_dir: PathBuf,
     status: Arc<AtomicU32>,
     running: Arc<AtomicBool>,
@@ -129,6 +131,8 @@ impl PtySession {
         let session = Self {
             id: id.clone(),
             master: Arc::new(Mutex::new(pair.master)),
+            slave: Arc::new(Mutex::new(Some(pair.slave))),
+            child: Arc::new(Mutex::new(None)),
             working_dir,
             status: Arc::new(AtomicU32::new(0)), // Idle
             running: Arc::new(AtomicBool::new(false)),
@@ -136,33 +140,34 @@ impl PtySession {
             output_buffer,
         };
 
-        // Spawn the reader task
-        session.spawn_reader(pair.slave)?;
+        // Spawn the reader task (reads from master PTY)
+        session.spawn_reader();
 
         Ok(session)
     }
 
-    fn spawn_reader(
-        &self,
-        slave: Box<dyn portable_pty::SlavePty + Send>,
-    ) -> anyhow::Result<()> {
+    /// Spawn a reader thread to read output from the PTY master.
+    /// This should be called once when the session is created.
+    fn spawn_reader(&self) {
         let master = self.master.clone();
         let tx = self.output_tx.clone();
         let buffer = self.output_buffer.clone();
         let running = self.running.clone();
         let status = self.status.clone();
+        let child_handle = self.child.clone();
+        let session_id = self.id.clone();
 
         std::thread::spawn(move || {
             let mut reader = match master.lock() {
                 Ok(m) => match m.try_clone_reader() {
                     Ok(r) => r,
                     Err(e) => {
-                        error!(error = %e, "Failed to clone PTY reader");
+                        error!(session_id = %session_id, error = %e, "Failed to clone PTY reader");
                         return;
                     }
                 },
                 Err(e) => {
-                    error!(error = %e, "Failed to lock master PTY");
+                    error!(session_id = %session_id, error = %e, "Failed to lock master PTY");
                     return;
                 }
             };
@@ -171,10 +176,36 @@ impl PtySession {
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => {
-                        // EOF
+                        // EOF - the child process has closed stdout
+                        info!(session_id = %session_id, "PTY reader received EOF");
+
+                        // Try to get exit status from child
+                        let exit_code: Option<u32> = if let Ok(mut child_guard) = child_handle.lock() {
+                            if let Some(ref mut child) = *child_guard {
+                                match child.try_wait() {
+                                    Ok(Some(status)) => {
+                                        info!(session_id = %session_id, exit_status = ?status, "Child process exited");
+                                        Some(status.exit_code())
+                                    }
+                                    Ok(None) => {
+                                        // Child still running, wait for it
+                                        match child.wait() {
+                                            Ok(status) => Some(status.exit_code()),
+                                            Err(_) => None,
+                                        }
+                                    }
+                                    Err(_) => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
                         running.store(false, Ordering::SeqCst);
                         status.store(3, Ordering::SeqCst); // Exited
-                        let _ = tx.send(OutputEvent::Exit(None));
+                        let _ = tx.send(OutputEvent::Exit(exit_code));
                         break;
                     }
                     Ok(n) => {
@@ -190,7 +221,7 @@ impl PtySession {
                         let _ = tx.send(OutputEvent::Stdout(data));
                     }
                     Err(e) => {
-                        error!(error = %e, "PTY read error");
+                        error!(session_id = %session_id, error = %e, "PTY read error");
                         running.store(false, Ordering::SeqCst);
                         status.store(3, Ordering::SeqCst);
                         let _ = tx.send(OutputEvent::Exit(None));
@@ -198,11 +229,7 @@ impl PtySession {
                     }
                 }
             }
-
-            drop(slave); // Clean up slave when done
         });
-
-        Ok(())
     }
 
     /// Spawn a command in this session.
@@ -213,6 +240,11 @@ impl PtySession {
         // Validate command against whitelist (SEC-001)
         validate_command(command)?;
 
+        // Check if a command is already running
+        if self.running.load(Ordering::SeqCst) {
+            anyhow::bail!("A command is already running in this session");
+        }
+
         info!(
             session_id = %self.id,
             command = %command,
@@ -220,6 +252,7 @@ impl PtySession {
             "Spawning command in PTY"
         );
 
+        // Build the command
         let mut cmd = CommandBuilder::new(command);
         for arg in args {
             cmd.arg(*arg);
@@ -230,10 +263,31 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
-        let master = self.master.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        // Get the slave to spawn the command on
+        let slave = {
+            let mut slave_guard = self.slave.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+            slave_guard.take().ok_or_else(|| anyhow::anyhow!("Slave PTY already consumed - session can only spawn one command"))?
+        };
 
-        // Note: portable-pty spawns via the slave, but we need the master for I/O
-        // The actual spawn happens differently - this is a simplified version
+        // Spawn the command on the slave PTY
+        let child = slave.spawn_command(cmd)?;
+
+        info!(
+            session_id = %self.id,
+            "Command spawned successfully"
+        );
+
+        // Drop the slave after spawning (releases handles to the child)
+        // This is important: the child now owns the PTY slave side
+        drop(slave);
+
+        // Store the child process handle
+        {
+            let mut child_guard = self.child.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+            *child_guard = Some(child);
+        }
+
+        // Update status
         self.running.store(true, Ordering::SeqCst);
         self.status.store(1, Ordering::SeqCst); // Running
 

@@ -33,4 +33,4 @@ anyhow = { workspace = true }
 toml = { workspace = true }
 
 # MCP client (for calling agent tools)
-rmcp = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }

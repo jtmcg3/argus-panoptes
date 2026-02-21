@@ -24,9 +24,11 @@
 //! ```
 
 pub mod config;
+pub mod pty_client;
 pub mod routing;
 pub mod triage;
 
 pub use config::CoordinatorConfig;
+pub use pty_client::{PtyMcpClient, PtyMcpClientBuilder, ReadResult, SpawnResult, StatusResult};
 pub use routing::{AgentRoute, RouteDecision};
 pub use triage::Coordinator;

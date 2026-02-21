@@ -1,9 +1,20 @@
 //! MCP tool definitions for PTY operations.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Input for pty_create tool.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct PtyCreateInput {
+    /// Session ID (unique identifier for this session)
+    pub session_id: String,
+
+    /// Working directory for the session
+    pub working_dir: String,
+}
+
 /// Input for pty_spawn tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtySpawnInput {
     /// Session ID (will be created if doesn't exist)
     pub session_id: String,
@@ -20,7 +31,7 @@ pub struct PtySpawnInput {
 }
 
 /// Input for pty_write tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtyWriteInput {
     /// Session ID
     pub session_id: String,
@@ -30,7 +41,7 @@ pub struct PtyWriteInput {
 }
 
 /// Input for pty_read tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtyReadInput {
     /// Session ID
     pub session_id: String,
@@ -41,7 +52,7 @@ pub struct PtyReadInput {
 }
 
 /// Input for pty_confirm tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtyConfirmInput {
     /// Session ID
     pub session_id: String,
@@ -51,18 +62,22 @@ pub struct PtyConfirmInput {
 }
 
 /// Input for pty_status tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtyStatusInput {
     /// Session ID
     pub session_id: String,
 }
 
 /// Input for pty_kill tool.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PtyKillInput {
     /// Session ID
     pub session_id: String,
 }
+
+/// Input for pty_list tool (empty - lists all sessions).
+#[derive(Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PtyListInput {}
 
 /// Output from pty_spawn tool.
 #[derive(Debug, Serialize, Deserialize)]

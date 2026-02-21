@@ -2,13 +2,25 @@
 //!
 //! Run this as a subprocess or standalone service to expose PTY
 //! capabilities via MCP.
+//!
+//! # Usage
+//!
+//! The server communicates over stdio using the MCP protocol:
+//!
+//! ```bash
+//! cargo run --bin pty-mcp-server
+//! ```
+//!
+//! Or configure it as an MCP server in your client's configuration.
 
 use panoptes_pty_mcp::PtyMcpServer;
+use rmcp::transport::io::stdio;
+use rmcp::ServiceExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
+    // Initialize logging to stderr (stdout is used for MCP communication)
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -19,21 +31,20 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting PTY-MCP server");
 
-    let _server = PtyMcpServer::new();
+    let server = PtyMcpServer::new();
 
-    // TODO: Implement actual MCP transport
-    // For stdio transport:
-    // server.serve((std::io::stdin(), std::io::stdout())).await?;
-    //
-    // For HTTP transport:
-    // let listener = TcpListener::bind("127.0.0.1:3001").await?;
-    // server.serve_http(listener).await?;
+    // Create stdio transport
+    let transport = stdio();
 
-    tracing::info!("PTY-MCP server ready (transport not yet implemented)");
+    // Serve the MCP server over stdio
+    let running = server.serve(transport).await?;
 
-    // Keep running
-    tokio::signal::ctrl_c().await?;
+    tracing::info!("PTY-MCP server ready and accepting requests");
 
-    tracing::info!("Shutting down PTY-MCP server");
+    // Wait for the server to complete (client disconnects or ctrl+c)
+    let quit_reason = running.waiting().await?;
+
+    tracing::info!(?quit_reason, "PTY-MCP server shutting down");
+
     Ok(())
 }
