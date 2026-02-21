@@ -5,12 +5,77 @@
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, LazyLock};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
+
+/// Whitelist of allowed commands for PTY sessions (SEC-001).
+/// Commands not in this list will be rejected to prevent command injection.
+static ALLOWED_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    HashSet::from([
+        // AI assistants
+        "claude",
+        // Build tools
+        "cargo",
+        "npm",
+        "yarn",
+        "pnpm",
+        "make",
+        "cmake",
+        // Version control
+        "git",
+        // Languages/runtimes
+        "python",
+        "python3",
+        "node",
+        "deno",
+        "bun",
+        "rustc",
+        // Testing
+        "pytest",
+        "jest",
+        "vitest",
+        // Utilities (read-only / safe)
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "find",
+        "tree",
+        "wc",
+        "diff",
+        "which",
+        "whoami",
+        "pwd",
+        "env",
+        "echo",
+    ])
+});
+
+/// Validates that a command is in the whitelist.
+/// Returns an error if the command is not allowed.
+pub fn validate_command(command: &str) -> anyhow::Result<()> {
+    // Extract the base command (first part before any paths or arguments)
+    let base_cmd = command
+        .split('/')
+        .last()
+        .unwrap_or(command)
+        .split_whitespace()
+        .next()
+        .unwrap_or(command);
+
+    if ALLOWED_COMMANDS.contains(base_cmd) {
+        Ok(())
+    } else {
+        warn!(command = %command, base_cmd = %base_cmd, "Command not in whitelist");
+        anyhow::bail!("Command '{}' is not allowed. Only whitelisted commands can be executed.", base_cmd)
+    }
+}
 
 /// Status of a PTY session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +206,13 @@ impl PtySession {
     }
 
     /// Spawn a command in this session.
+    ///
+    /// The command must be in the whitelist (see `ALLOWED_COMMANDS`).
+    /// This prevents command injection attacks (SEC-001).
     pub fn spawn(&self, command: &str, args: &[&str]) -> anyhow::Result<()> {
+        // Validate command against whitelist (SEC-001)
+        validate_command(command)?;
+
         info!(
             session_id = %self.id,
             command = %command,

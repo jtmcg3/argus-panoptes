@@ -11,8 +11,7 @@ panoptes-common = { workspace = true }
 panoptes-memory = { workspace = true }
 
 # ZeroClaw for triage/coordination
-# NOTE: Commented out until zeroclaw fork is fixed
-# zeroclaw = { workspace = true }
+zeroclaw = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

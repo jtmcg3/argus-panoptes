@@ -86,13 +86,7 @@ impl AgentMessage {
 }
 
 fn uuid_v4() -> String {
-    // Simple UUID v4 generation without external crate
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{:032x}", now)
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn now_millis() -> u64 {

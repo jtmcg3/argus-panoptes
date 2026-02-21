@@ -12,6 +12,10 @@ panoptes-common = { workspace = true }
 # Vector database
 lancedb = { workspace = true }
 
+# Arrow (for LanceDB schema and data)
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
@@ -28,5 +32,12 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# UUID generation
+uuid = { workspace = true }
+
 # Embeddings (local model)
-# fastembed = "4"  # TODO: Add when ready
+fastembed = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

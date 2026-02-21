@@ -50,6 +50,10 @@ pub mod retrieval;
 pub mod store;
 pub mod types;
 
+pub use embedding::{EmbeddingError, EmbeddingService};
 pub use retrieval::MemoryRetriever;
 pub use store::MemoryStore;
 pub use types::{Memory, MemoryConfig, MemoryType};
+
+// Re-export fastembed's EmbeddingModel for convenience
+pub use fastembed::EmbeddingModel;

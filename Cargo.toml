@@ -24,8 +24,7 @@ panoptes-memory = { path = "crates/memory" }
 panoptes-common = { path = "crates/common" }
 
 # External: ZeroClaw (local fork)
-# NOTE: Commented out until zeroclaw fork is fixed (missing futures crate, duplicate chat fn)
-# zeroclaw = { path = "../zeroclaw" }
+zeroclaw = { path = "../zeroclaw" }
 
 # External: Argus PTY components (reference for extraction)
 # argus = { path = "../argus" }
@@ -60,6 +59,19 @@ toml = "0.8"
 # Async utilities
 async-trait = "0.1"
 futures = "0.3"
+
+# UUID generation
+uuid = { version = "1", features = ["v4"] }
+
+# Embeddings (local model)
+fastembed = "4"
+
+# Synchronization
+once_cell = "1"
+
+# Arrow (for LanceDB schema/data)
+arrow-array = "53"
+arrow-schema = "53"
 
 [profile.release]
 lto = true

@@ -40,3 +40,4 @@ Cargo.lock
 
 # Docker
 .docker/
+crates/memory/.fastembed_cache/

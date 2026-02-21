@@ -73,7 +73,7 @@ impl Memory {
             .as_millis() as u64;
 
         Self {
-            id: format!("mem_{:016x}", now),
+            id: format!("mem_{}", uuid::Uuid::new_v4()),
             memory_type: MemoryType::Episodic,
             content: content.into(),
             source: source.into(),

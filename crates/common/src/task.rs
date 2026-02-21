@@ -77,7 +77,7 @@ impl Task {
             .as_millis() as u64;
 
         Self {
-            id: format!("task_{:016x}", now),
+            id: format!("task_{}", uuid::Uuid::new_v4()),
             description: description.into(),
             priority: TaskPriority::Normal,
             status: TaskStatus::Pending,
