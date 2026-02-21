@@ -3,6 +3,12 @@
 //! This module provides the main memory store that combines:
 //! - Working memory (hot): Recent items kept in a VecDeque for fast access
 //! - Long-term memory (cold): LanceDB storage with vector similarity search
+//!
+//! # Security Features (SEC-008)
+//!
+//! - Memory isolation: Agents can only access their own memories
+//! - Caller authentication via `caller_agent_id` parameter
+//! - Authorization checks on memory retrieval
 
 use crate::embedding::EmbeddingService;
 use crate::types::{Memory, MemoryConfig, MemoryType};
@@ -13,7 +19,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, FieldRef, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{Connection, Table};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument, warn};
@@ -25,6 +31,82 @@ const MEMORIES_TABLE: &str = "memories";
 /// Escapes single quotes to prevent SQL injection.
 fn sanitize_filter_value(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+// ============================================================================
+// SEC-008: Memory Access Control
+// ============================================================================
+
+/// Memory access control policy (SEC-008).
+///
+/// Defines which agents can access which memories.
+#[derive(Debug, Clone)]
+pub struct MemoryAccessControl {
+    /// Agents with shared memory access permissions.
+    /// Key: agent_id, Value: set of agent_ids that can access this agent's memories.
+    shared_access: Arc<RwLock<std::collections::HashMap<String, HashSet<String>>>>,
+}
+
+impl MemoryAccessControl {
+    /// Create a new access control policy with no shared access.
+    pub fn new() -> Self {
+        Self {
+            shared_access: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Check if `caller` can read `target`'s memories.
+    ///
+    /// SEC-008: Authorization check for memory access.
+    pub async fn can_read(&self, caller: &str, target: &str) -> bool {
+        // Own memories are always readable
+        if caller == target {
+            return true;
+        }
+
+        // Check for explicit shared access
+        let shared = self.shared_access.read().await;
+        if let Some(allowed) = shared.get(target) {
+            return allowed.contains(caller);
+        }
+
+        false
+    }
+
+    /// Grant `caller` access to read `target`'s memories.
+    pub async fn grant_access(&self, caller: &str, target: &str) {
+        self.shared_access
+            .write()
+            .await
+            .entry(target.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(caller.to_string());
+
+        info!(
+            caller = caller,
+            target = target,
+            "Granted memory access"
+        );
+    }
+
+    /// Revoke `caller`'s access to `target`'s memories.
+    pub async fn revoke_access(&self, caller: &str, target: &str) {
+        let mut shared = self.shared_access.write().await;
+        if let Some(allowed) = shared.get_mut(target) {
+            allowed.remove(caller);
+            info!(
+                caller = caller,
+                target = target,
+                "Revoked memory access"
+            );
+        }
+    }
+}
+
+impl Default for MemoryAccessControl {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// The main memory store.
@@ -479,6 +561,9 @@ impl MemoryStore {
     }
 
     /// Get memories by agent from both working memory and LanceDB.
+    ///
+    /// Note: This is the unprotected version. For production use with
+    /// multi-agent systems, use `get_by_agent_authorized()` instead.
     #[instrument(skip(self))]
     pub async fn get_by_agent(&self, agent_id: &str) -> Vec<Memory> {
         let mut results: Vec<Memory> = self
@@ -566,6 +651,75 @@ impl MemoryStore {
         }
 
         results
+    }
+
+    /// Get memories by agent with authorization check (SEC-008).
+    ///
+    /// # Arguments
+    /// * `caller_agent_id` - The agent making the request
+    /// * `target_agent_id` - The agent whose memories to retrieve
+    /// * `access_control` - The access control policy to check
+    ///
+    /// # Returns
+    /// * `Ok(Vec<Memory>)` - Memories if authorized
+    /// * `Err` - If the caller is not authorized to access the target's memories
+    #[instrument(skip(self, access_control))]
+    pub async fn get_by_agent_authorized(
+        &self,
+        caller_agent_id: &str,
+        target_agent_id: &str,
+        access_control: &MemoryAccessControl,
+    ) -> anyhow::Result<Vec<Memory>> {
+        // SEC-008: Check authorization
+        if !access_control.can_read(caller_agent_id, target_agent_id).await {
+            warn!(
+                caller = caller_agent_id,
+                target = target_agent_id,
+                "Unauthorized memory access attempt"
+            );
+            anyhow::bail!(
+                "Agent '{}' is not authorized to access memories of agent '{}'",
+                caller_agent_id,
+                target_agent_id
+            );
+        }
+
+        debug!(
+            caller = caller_agent_id,
+            target = target_agent_id,
+            "Authorized memory access"
+        );
+
+        Ok(self.get_by_agent(target_agent_id).await)
+    }
+
+    /// Add a memory with ownership validation (SEC-008).
+    ///
+    /// Ensures the memory's agent_id matches the caller_agent_id.
+    #[instrument(skip(self, memory))]
+    pub async fn add_authorized(
+        &self,
+        caller_agent_id: &str,
+        memory: Memory,
+        persist: bool,
+    ) -> anyhow::Result<()> {
+        // SEC-008: Validate that caller can only create memories for themselves
+        if let Some(ref agent_id) = memory.agent_id {
+            if agent_id != caller_agent_id {
+                warn!(
+                    caller = caller_agent_id,
+                    memory_agent = agent_id,
+                    "Attempt to create memory for different agent"
+                );
+                anyhow::bail!(
+                    "Agent '{}' cannot create memories for agent '{}'",
+                    caller_agent_id,
+                    agent_id
+                );
+            }
+        }
+
+        self.add(memory, persist).await
     }
 
     /// Get the total number of memories in LanceDB.

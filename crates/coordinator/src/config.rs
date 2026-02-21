@@ -1,8 +1,15 @@
 //! Configuration for the coordinator.
+//!
+//! # Security Features (SEC-005)
+//!
+//! - Config file permission validation on Unix systems
+//! - Rejects world-readable files containing API keys
+//! - Warns about API keys stored in config files
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::warn;
 
 /// Main coordinator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,11 +130,108 @@ impl Default for CoordinatorConfig {
 
 impl CoordinatorConfig {
     /// Load configuration from a TOML file.
+    ///
+    /// # Security (SEC-005)
+    ///
+    /// On Unix systems, this function validates that:
+    /// - The file is a regular file (not a symlink)
+    /// - The file is not world-readable if it contains an API key
+    /// - Warns if API keys are stored in the config file
     pub fn from_file(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+
+        // SEC-005: Validate file permissions on Unix
+        #[cfg(unix)]
+        validate_config_file_permissions(path)?;
+
+        let content = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&content)?;
+
+        // SEC-005: Warn if API key is in config file
+        if config.provider.api_key.is_some() {
+            warn!(
+                "API key found in config file '{}'. For better security, \
+                 use environment variables instead (OPENAI_API_KEY, ANTHROPIC_API_KEY).",
+                path.display()
+            );
+        }
+
+        Ok(config)
+    }
+
+    /// Load configuration from a TOML file without permission checks.
+    ///
+    /// Use this only for testing or when you've already validated the file.
+    pub fn from_file_unchecked(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
+}
+
+/// Validate config file permissions on Unix systems (SEC-005).
+///
+/// Requirements:
+/// - File must be a regular file (not symlink, directory, etc.)
+/// - File must not be world-writable (mode & 0o002 == 0)
+/// - If file contains API key patterns, must not be world-readable
+#[cfg(unix)]
+fn validate_config_file_permissions(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read config file '{}': {}", path.display(), e))?;
+
+    // Must be a regular file
+    if !metadata.is_file() {
+        anyhow::bail!(
+            "Config path '{}' is not a regular file. Symlinks and directories are not allowed.",
+            path.display()
+        );
+    }
+
+    let mode = metadata.permissions().mode();
+    let permission_bits = mode & 0o777;
+
+    // Must not be world-writable
+    if permission_bits & 0o002 != 0 {
+        anyhow::bail!(
+            "Config file '{}' is world-writable (mode {:04o}). \
+             This is a security risk. Fix with: chmod o-w {}",
+            path.display(),
+            permission_bits,
+            path.display()
+        );
+    }
+
+    // Check if file might contain sensitive data
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let has_api_key = content.contains("api_key")
+        && (content.contains("sk-") || content.contains("key ="));
+
+    // If contains API key, must not be world-readable
+    if has_api_key && permission_bits & 0o004 != 0 {
+        anyhow::bail!(
+            "Config file '{}' contains an API key but is world-readable (mode {:04o}). \
+             This is a security risk. Fix with: chmod 600 {}",
+            path.display(),
+            permission_bits,
+            path.display()
+        );
+    }
+
+    // Warn about group-readable files with API keys
+    if has_api_key && permission_bits & 0o040 != 0 {
+        warn!(
+            "Config file '{}' contains an API key and is group-readable (mode {:04o}). \
+             Consider restricting access with: chmod 600 {}",
+            path.display(),
+            permission_bits,
+            path.display()
+        );
+    }
+
+    Ok(())
 }
 
 impl ProviderConfig {

@@ -647,28 +647,85 @@ impl PtySession {
     }
 }
 
-/// Manages multiple PTY sessions.
+use std::time::{Duration, Instant};
+
+/// Default session TTL (SEC-007).
+pub const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(3600); // 1 hour
+
+/// Session entry with TTL metadata (SEC-007).
+struct SessionEntry {
+    session: Arc<PtySession>,
+    created_at: Instant,
+    last_accessed: Instant,
+}
+
+impl SessionEntry {
+    fn new(session: Arc<PtySession>) -> Self {
+        let now = Instant::now();
+        Self {
+            session,
+            created_at: now,
+            last_accessed: now,
+        }
+    }
+
+    fn touch(&mut self) {
+        self.last_accessed = Instant::now();
+    }
+
+    fn is_expired(&self, ttl: Duration) -> bool {
+        self.last_accessed.elapsed() > ttl
+    }
+
+    fn age(&self) -> Duration {
+        self.created_at.elapsed()
+    }
+}
+
+/// Manages multiple PTY sessions with TTL support (SEC-007).
 pub struct SessionManager {
-    sessions: RwLock<HashMap<String, Arc<PtySession>>>,
+    sessions: RwLock<HashMap<String, SessionEntry>>,
+    /// Session time-to-live after last access.
+    ttl: Duration,
 }
 
 impl SessionManager {
+    /// Create a new session manager with default TTL.
     pub fn new() -> Self {
+        Self::with_ttl(DEFAULT_SESSION_TTL)
+    }
+
+    /// Create a new session manager with custom TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            ttl,
         }
     }
 
     /// Create a new session.
     pub async fn create(&self, id: &str, working_dir: PathBuf) -> anyhow::Result<Arc<PtySession>> {
         let session = Arc::new(PtySession::new(id, working_dir)?);
-        self.sessions.write().await.insert(id.to_string(), session.clone());
+        let entry = SessionEntry::new(session.clone());
+        self.sessions.write().await.insert(id.to_string(), entry);
+        info!(session_id = %id, ttl_secs = self.ttl.as_secs(), "Created session with TTL");
         Ok(session)
     }
 
-    /// Get an existing session.
+    /// Get an existing session, updating last_accessed time.
     pub async fn get(&self, id: &str) -> Option<Arc<PtySession>> {
-        self.sessions.read().await.get(id).cloned()
+        let mut sessions = self.sessions.write().await;
+        if let Some(entry) = sessions.get_mut(id) {
+            // Check if expired
+            if entry.is_expired(self.ttl) {
+                info!(session_id = %id, "Session expired, removing");
+                sessions.remove(id);
+                return None;
+            }
+            entry.touch();
+            return Some(entry.session.clone());
+        }
+        None
     }
 
     /// Get or create a session.
@@ -681,13 +738,64 @@ impl SessionManager {
 
     /// Remove a session.
     pub async fn remove(&self, id: &str) -> Option<Arc<PtySession>> {
-        self.sessions.write().await.remove(id)
+        self.sessions.write().await.remove(id).map(|e| e.session)
     }
 
     /// List all session IDs.
     pub async fn list(&self) -> Vec<String> {
         self.sessions.read().await.keys().cloned().collect()
     }
+
+    /// Clean up expired sessions (SEC-007).
+    ///
+    /// Returns the number of sessions removed.
+    pub async fn cleanup_expired(&self) -> usize {
+        let mut sessions = self.sessions.write().await;
+        let expired: Vec<String> = sessions
+            .iter()
+            .filter(|(_, entry)| entry.is_expired(self.ttl))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let count = expired.len();
+        for id in &expired {
+            sessions.remove(id);
+            info!(session_id = %id, "Cleaned up expired session");
+        }
+
+        if count > 0 {
+            info!(cleaned = count, "Session cleanup complete");
+        }
+
+        count
+    }
+
+    /// Get session statistics.
+    pub async fn stats(&self) -> SessionStats {
+        let sessions = self.sessions.read().await;
+        let total = sessions.len();
+        let expired = sessions.values().filter(|e| e.is_expired(self.ttl)).count();
+        let active = total - expired;
+        let oldest_age = sessions.values().map(|e| e.age()).max();
+
+        SessionStats {
+            total_sessions: total,
+            active_sessions: active,
+            expired_sessions: expired,
+            ttl: self.ttl,
+            oldest_session_age: oldest_age,
+        }
+    }
+}
+
+/// Session manager statistics (SEC-007).
+#[derive(Debug, Clone)]
+pub struct SessionStats {
+    pub total_sessions: usize,
+    pub active_sessions: usize,
+    pub expired_sessions: usize,
+    pub ttl: Duration,
+    pub oldest_session_age: Option<Duration>,
 }
 
 impl Default for SessionManager {
