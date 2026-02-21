@@ -59,21 +59,59 @@ static ALLOWED_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 /// Validates that a command is in the whitelist.
 /// Returns an error if the command is not allowed.
+///
+/// Security: This function rejects any command containing a path separator ('/')
+/// to prevent path spoofing attacks where an attacker could create a malicious
+/// binary named like an allowed command (e.g., /tmp/git).
 pub fn validate_command(command: &str) -> anyhow::Result<()> {
-    // Extract the base command (first part before any paths or arguments)
-    let base_cmd = command
-        .split('/')
-        .last()
-        .unwrap_or(command)
-        .split_whitespace()
-        .next()
-        .unwrap_or(command);
+    // Security: Reject any command containing path separators
+    // This prevents attacks like "/tmp/git" which would have basename "git"
+    if command.contains('/') || command.contains('\\') {
+        warn!(command = %command, "Command contains path separator - rejected");
+        anyhow::bail!(
+            "Command '{}' contains a path separator. Only bare command names are allowed (e.g., 'git' not '/usr/bin/git').",
+            command
+        )
+    }
 
-    if ALLOWED_COMMANDS.contains(base_cmd) {
+    // Get the command name (first token, no paths allowed at this point)
+    let cmd_name = command.split_whitespace().next().unwrap_or(command);
+
+    if ALLOWED_COMMANDS.contains(cmd_name) {
         Ok(())
     } else {
-        warn!(command = %command, base_cmd = %base_cmd, "Command not in whitelist");
-        anyhow::bail!("Command '{}' is not allowed. Only whitelisted commands can be executed.", base_cmd)
+        warn!(command = %command, cmd_name = %cmd_name, "Command not in whitelist");
+        anyhow::bail!("Command '{}' is not allowed. Only whitelisted commands can be executed.", cmd_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_command_allows_whitelisted() {
+        assert!(validate_command("git").is_ok());
+        assert!(validate_command("cargo").is_ok());
+        assert!(validate_command("claude").is_ok());
+    }
+
+    #[test]
+    fn test_validate_command_rejects_path_spoofing() {
+        // These should all be rejected - path spoofing attempts
+        assert!(validate_command("/tmp/git").is_err());
+        assert!(validate_command("/usr/bin/git").is_err());
+        assert!(validate_command("../git").is_err());
+        assert!(validate_command("./git").is_err());
+        assert!(validate_command("/home/attacker/malicious/claude").is_err());
+    }
+
+    #[test]
+    fn test_validate_command_rejects_unknown() {
+        assert!(validate_command("rm").is_err());
+        assert!(validate_command("sudo").is_err());
+        assert!(validate_command("sh").is_err());
+        assert!(validate_command("bash").is_err());
     }
 }
 

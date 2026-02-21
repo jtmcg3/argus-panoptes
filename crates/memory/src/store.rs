@@ -60,8 +60,11 @@ impl MemoryStore {
 
         info!("Connected to LanceDB");
 
-        // Initialize embedding service
-        let embedding_service = EmbeddingService::default();
+        // Initialize embedding service from config (validates model + dimension match)
+        let embedding_service = EmbeddingService::from_config(
+            &config.embedding_model,
+            config.embedding_dim,
+        ).map_err(|e| anyhow::anyhow!("Failed to initialize embedding service: {}", e))?;
 
         let mut store = Self {
             config,
@@ -398,23 +401,27 @@ impl MemoryStore {
         );
 
         // First, search working memory with keyword matching
-        let working = self.working_memory.read().await;
-        let mut results: Vec<Memory> = working
-            .iter()
-            .filter(|m| {
-                // Filter by type if specified
-                if let Some(mt) = memory_type {
-                    if m.memory_type != mt {
-                        return false;
+        // NOTE: Lock scope is limited to avoid holding lock across async operations
+        let mut results: Vec<Memory> = {
+            let working = self.working_memory.read().await;
+            working
+                .iter()
+                .filter(|m| {
+                    // Filter by type if specified
+                    if let Some(mt) = memory_type {
+                        if m.memory_type != mt {
+                            return false;
+                        }
                     }
-                }
-                // Simple keyword match for working memory
-                m.content.to_lowercase().contains(&query.to_lowercase())
-            })
-            .cloned()
-            .collect();
+                    // Simple keyword match for working memory
+                    m.content.to_lowercase().contains(&query.to_lowercase())
+                })
+                .cloned()
+                .collect()
+            // Lock is dropped here before async embedding/vector search
+        };
 
-        // Search LanceDB with vector similarity
+        // Search LanceDB with vector similarity (no lock held during these awaits)
         if let Some(ref table) = self.table {
             // Generate query embedding
             let query_embedding = self.embedding_service.embed(query).await?;
@@ -708,15 +715,26 @@ fn str_to_memory_type(s: &str) -> anyhow::Result<MemoryType> {
 }
 
 /// Create a FixedSizeListArray from an embedding vector.
+///
+/// Validates that the embedding length matches the expected dimension.
 fn create_embedding_array(embedding: Vec<f32>, dim: usize) -> anyhow::Result<ArrayRef> {
+    // Validate embedding length matches configured dimension
+    if embedding.len() != dim {
+        anyhow::bail!(
+            "Embedding dimension mismatch: expected {} but got {} values",
+            dim,
+            embedding.len()
+        );
+    }
+
     let values = Float32Array::from(embedding);
     let field: FieldRef = Arc::new(Field::new("item", DataType::Float32, true));
-    let array = FixedSizeListArray::new(
+    let array = FixedSizeListArray::try_new(
         field,
         dim as i32,
         Arc::new(values),
         None, // no nulls
-    );
+    ).map_err(|e| anyhow::anyhow!("Failed to create embedding array: {}", e))?;
     Ok(Arc::new(array))
 }
 

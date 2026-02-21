@@ -90,6 +90,48 @@ impl EmbeddingService {
         }
     }
 
+    /// Creates an embedding service from a model name string.
+    ///
+    /// Returns an error if the model name is not recognized.
+    pub fn from_model_str(model_name: &str) -> Result<Self, EmbeddingError> {
+        let model = match model_name {
+            "all-MiniLM-L6-v2" | "AllMiniLML6V2" => EmbeddingModel::AllMiniLML6V2,
+            "all-MiniLM-L6-v2-q" | "AllMiniLML6V2Q" => EmbeddingModel::AllMiniLML6V2Q,
+            "all-MiniLM-L12-v2" | "AllMiniLML12V2" => EmbeddingModel::AllMiniLML12V2,
+            "all-MiniLM-L12-v2-q" | "AllMiniLML12V2Q" => EmbeddingModel::AllMiniLML12V2Q,
+            "bge-base-en-v1.5" | "BGEBaseENV15" => EmbeddingModel::BGEBaseENV15,
+            "bge-small-en-v1.5" | "BGESmallENV15" => EmbeddingModel::BGESmallENV15,
+            "bge-large-en-v1.5" | "BGELargeENV15" => EmbeddingModel::BGELargeENV15,
+            "nomic-embed-text-v1" | "NomicEmbedTextV1" => EmbeddingModel::NomicEmbedTextV1,
+            "nomic-embed-text-v1.5" | "NomicEmbedTextV15" => EmbeddingModel::NomicEmbedTextV15,
+            "multilingual-e5-small" | "MultilingualE5Small" => EmbeddingModel::MultilingualE5Small,
+            "multilingual-e5-base" | "MultilingualE5Base" => EmbeddingModel::MultilingualE5Base,
+            "multilingual-e5-large" | "MultilingualE5Large" => EmbeddingModel::MultilingualE5Large,
+            _ => {
+                return Err(EmbeddingError::ModelInit(format!(
+                    "Unknown embedding model: '{}'. Supported models: all-MiniLM-L6-v2, bge-base-en-v1.5, nomic-embed-text-v1.5, etc.",
+                    model_name
+                )));
+            }
+        };
+        Ok(Self::new(model))
+    }
+
+    /// Creates an embedding service from config, validating dimension matches.
+    ///
+    /// Returns an error if the model is unknown or if the configured dimension
+    /// doesn't match the model's actual dimension.
+    pub fn from_config(model_name: &str, expected_dim: usize) -> Result<Self, EmbeddingError> {
+        let service = Self::from_model_str(model_name)?;
+        if service.dimension != expected_dim {
+            return Err(EmbeddingError::ModelInit(format!(
+                "Dimension mismatch: model '{}' produces {}-dim vectors but config specifies {}",
+                model_name, service.dimension, expected_dim
+            )));
+        }
+        Ok(service)
+    }
+
     /// Initializes the embedding model if not already done.
     ///
     /// This is called automatically on first embed call, but can be called
@@ -217,13 +259,35 @@ impl Default for EmbeddingService {
 mod tests {
     use super::*;
 
+    // Unit test - doesn't load model
     #[tokio::test]
     async fn test_embedding_dimension() {
         let service = EmbeddingService::default();
         assert_eq!(service.dimension(), 384);
     }
 
+    // Unit test - validates model name parsing
+    #[test]
+    fn test_from_model_str() {
+        assert!(EmbeddingService::from_model_str("all-MiniLM-L6-v2").is_ok());
+        assert!(EmbeddingService::from_model_str("unknown-model").is_err());
+    }
+
+    // Unit test - validates dimension matching
+    #[test]
+    fn test_from_config_dimension_mismatch() {
+        // MiniLM is 384-dim, so 512 should fail
+        let result = EmbeddingService::from_config("all-MiniLM-L6-v2", 512);
+        assert!(result.is_err());
+
+        // Correct dimension should work
+        let result = EmbeddingService::from_config("all-MiniLM-L6-v2", 384);
+        assert!(result.is_ok());
+    }
+
+    // Integration test - downloads model, run with: cargo test --ignored
     #[tokio::test]
+    #[ignore = "Downloads model from network, slow"]
     async fn test_embed_single() {
         let service = EmbeddingService::default();
         let text = "Hello, world!";
@@ -235,7 +299,9 @@ mod tests {
         assert!(embedding.iter().any(|&x| x != 0.0));
     }
 
+    // Integration test - downloads model, run with: cargo test --ignored
     #[tokio::test]
+    #[ignore = "Downloads model from network, slow"]
     async fn test_embed_batch() {
         let service = EmbeddingService::default();
         let texts = vec!["Hello", "World", "Test"];
@@ -249,7 +315,9 @@ mod tests {
         }
     }
 
+    // Integration test - run with: cargo test --ignored
     #[tokio::test]
+    #[ignore = "Downloads model from network, slow"]
     async fn test_embed_batch_empty() {
         let service = EmbeddingService::default();
         let texts: Vec<&str> = vec![];
@@ -259,7 +327,9 @@ mod tests {
         assert!(embeddings.is_empty());
     }
 
+    // Integration test - downloads model, run with: cargo test --ignored
     #[tokio::test]
+    #[ignore = "Downloads model from network, slow"]
     async fn test_similar_texts_have_similar_embeddings() {
         let service = EmbeddingService::default();
 

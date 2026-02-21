@@ -23,8 +23,10 @@ panoptes-agents = { path = "crates/agents" }
 panoptes-memory = { path = "crates/memory" }
 panoptes-common = { path = "crates/common" }
 
-# External: ZeroClaw (local fork)
-zeroclaw = { path = "../zeroclaw" }
+# External: ZeroClaw
+# Default: Use git repo for CI/portable builds
+# Override locally with: [patch.crates-io] zeroclaw = { path = "../zeroclaw" }
+zeroclaw = { git = "https://github.com/zeroclaw-labs/zeroclaw.git", branch = "main" }
 
 # External: Argus PTY components (reference for extraction)
 # argus = { path = "../argus" }
