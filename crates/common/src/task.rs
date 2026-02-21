@@ -105,3 +105,88 @@ impl Task {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_creation() {
+        let task = Task::new("Test task");
+
+        assert!(task.id.starts_with("task_"));
+        assert_eq!(task.description, "Test task");
+        assert_eq!(task.priority, TaskPriority::Normal);
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert!(task.assigned_agent.is_none());
+        assert!(task.parent_task.is_none());
+        assert!(task.working_dir.is_none());
+        assert!(task.context.is_none());
+        assert!(task.created_at > 0);
+    }
+
+    #[test]
+    fn test_task_builder_methods() {
+        let task = Task::new("Build task")
+            .with_priority(TaskPriority::Critical)
+            .with_context("Important context")
+            .with_working_dir("/home/user/project");
+
+        assert_eq!(task.priority, TaskPriority::Critical);
+        assert_eq!(task.context, Some("Important context".to_string()));
+        assert_eq!(task.working_dir, Some("/home/user/project".to_string()));
+    }
+
+    #[test]
+    fn test_task_priority_ordering() {
+        assert!(TaskPriority::Critical > TaskPriority::High);
+        assert!(TaskPriority::High > TaskPriority::Normal);
+        assert!(TaskPriority::Normal > TaskPriority::Low);
+    }
+
+    #[test]
+    fn test_task_priority_default() {
+        assert_eq!(TaskPriority::default(), TaskPriority::Normal);
+    }
+
+    #[test]
+    fn test_task_unique_ids() {
+        let task1 = Task::new("Task 1");
+        let task2 = Task::new("Task 2");
+
+        assert_ne!(task1.id, task2.id);
+    }
+
+    #[test]
+    fn test_task_serialization() {
+        let task = Task::new("Serialization test")
+            .with_priority(TaskPriority::High)
+            .with_context("Some context");
+
+        let json = serde_json::to_string(&task).unwrap();
+        let deserialized: Task = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.description, task.description);
+        assert_eq!(deserialized.priority, task.priority);
+        assert_eq!(deserialized.context, task.context);
+    }
+
+    #[test]
+    fn test_task_status_variants() {
+        let statuses = vec![
+            TaskStatus::Pending,
+            TaskStatus::Assigned,
+            TaskStatus::InProgress,
+            TaskStatus::AwaitingInput,
+            TaskStatus::Completed,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ];
+
+        for status in statuses {
+            let json = serde_json::to_string(&status).unwrap();
+            let deserialized: TaskStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, status);
+        }
+    }
+}
