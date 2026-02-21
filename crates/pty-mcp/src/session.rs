@@ -2,16 +2,22 @@
 //!
 //! This module provides the core session management logic, adapted from
 //! the argus project's shell module.
+//!
+//! # Security Features
+//!
+//! - **SEC-001**: Command whitelist to prevent injection
+//! - **SEC-004**: Bounded output buffer to prevent memory exhaustion
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, SlavePty};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, LazyLock};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Whitelist of allowed commands for PTY sessions (SEC-001).
 /// Commands not in this list will be rejected to prevent command injection.
@@ -113,6 +119,255 @@ mod tests {
         assert!(validate_command("sh").is_err());
         assert!(validate_command("bash").is_err());
     }
+
+    // SEC-004: Bounded output buffer tests
+
+    #[test]
+    fn test_bounded_buffer_append() {
+        let mut buffer = BoundedOutputBuffer::with_max_size(100);
+
+        buffer.append(b"Hello ".to_vec());
+        buffer.append(b"World".to_vec());
+
+        assert_eq!(buffer.get_string().unwrap(), "Hello World");
+        assert_eq!(buffer.size(), 11);
+    }
+
+    #[test]
+    fn test_bounded_buffer_eviction() {
+        let mut buffer = BoundedOutputBuffer::with_max_size(20);
+
+        // Fill buffer
+        buffer.append(b"12345".to_vec()); // 5 bytes
+        buffer.append(b"67890".to_vec()); // 10 bytes total
+        buffer.append(b"ABCDE".to_vec()); // 15 bytes total
+
+        assert_eq!(buffer.size(), 15);
+
+        // This should trigger eviction
+        let evicted = buffer.append(b"FGHIJ".to_vec()); // Would be 20 bytes, exactly at limit
+        assert_eq!(buffer.size(), 20);
+        assert_eq!(evicted, 0); // No eviction needed, exactly at limit
+
+        // This should evict the oldest chunk
+        let evicted = buffer.append(b"KLMNO".to_vec()); // Would exceed 20 bytes
+        assert!(evicted > 0);
+        assert!(buffer.size() <= 20);
+    }
+
+    #[test]
+    fn test_bounded_buffer_oversized_chunk() {
+        let mut buffer = BoundedOutputBuffer::with_max_size(10);
+
+        // Add a chunk larger than max size
+        let oversized = vec![b'X'; 20];
+        let evicted = buffer.append(oversized);
+
+        // Should truncate to last 10 bytes
+        assert_eq!(buffer.size(), 10);
+        assert_eq!(evicted, 10); // 10 bytes were dropped
+    }
+
+    #[test]
+    fn test_bounded_buffer_clear() {
+        let mut buffer = BoundedOutputBuffer::with_max_size(100);
+
+        buffer.append(b"test data".to_vec());
+        assert!(buffer.size() > 0);
+
+        buffer.clear();
+        assert_eq!(buffer.size(), 0);
+        assert_eq!(buffer.chunk_count(), 0);
+    }
+
+    #[test]
+    fn test_bounded_buffer_utilization() {
+        let mut buffer = BoundedOutputBuffer::with_max_size(100);
+
+        buffer.append(vec![0u8; 50]);
+        assert!((buffer.utilization() - 50.0).abs() < 0.1);
+
+        buffer.append(vec![0u8; 25]);
+        assert!((buffer.utilization() - 75.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_bounded_buffer_lossy_string() {
+        let mut buffer = BoundedOutputBuffer::new();
+
+        // Add some invalid UTF-8
+        buffer.append(vec![0xFF, 0xFE, b'H', b'i']);
+
+        let lossy = buffer.get_string_lossy();
+        assert!(lossy.contains("Hi"));
+        // Invalid bytes should be replaced with U+FFFD
+        assert!(lossy.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn test_bounded_buffer_default_size() {
+        let buffer = BoundedOutputBuffer::new();
+        assert_eq!(buffer.max_size(), MAX_OUTPUT_BUFFER_SIZE);
+    }
+}
+
+/// Maximum buffer size in bytes (SEC-004).
+/// Default: 10 MB - prevents memory exhaustion from large outputs.
+pub const MAX_OUTPUT_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
+/// Warning threshold as a percentage of max buffer size.
+const BUFFER_WARNING_THRESHOLD: f32 = 0.8;
+
+/// A bounded FIFO buffer for PTY output (SEC-004).
+///
+/// Prevents memory exhaustion by evicting oldest data when size limit is reached.
+/// Uses a VecDeque of chunks to avoid expensive reallocation during eviction.
+#[derive(Debug)]
+pub struct BoundedOutputBuffer {
+    /// Buffer chunks (newest at back).
+    chunks: VecDeque<Vec<u8>>,
+    /// Current total size in bytes.
+    current_size: usize,
+    /// Maximum allowed size.
+    max_size: usize,
+    /// Whether we've warned about approaching limit.
+    warned: bool,
+}
+
+impl BoundedOutputBuffer {
+    /// Create a new bounded output buffer with default max size.
+    pub fn new() -> Self {
+        Self::with_max_size(MAX_OUTPUT_BUFFER_SIZE)
+    }
+
+    /// Create a new bounded output buffer with custom max size.
+    pub fn with_max_size(max_size: usize) -> Self {
+        Self {
+            chunks: VecDeque::with_capacity(256),
+            current_size: 0,
+            max_size,
+            warned: false,
+        }
+    }
+
+    /// Append data to the buffer, evicting oldest chunks if necessary.
+    ///
+    /// Returns the number of bytes evicted (0 if no eviction needed).
+    pub fn append(&mut self, data: Vec<u8>) -> usize {
+        let data_len = data.len();
+
+        // If single chunk exceeds max, truncate it
+        if data_len > self.max_size {
+            warn!(
+                data_size = data_len,
+                max_size = self.max_size,
+                "Single output chunk exceeds buffer limit, truncating"
+            );
+            // Keep only the last max_size bytes
+            let truncated = data[(data_len - self.max_size)..].to_vec();
+            self.chunks.clear();
+            self.current_size = truncated.len();
+            self.chunks.push_back(truncated);
+            return data_len - self.max_size;
+        }
+
+        let mut evicted = 0;
+
+        // Evict oldest chunks until new data fits
+        while self.current_size + data_len > self.max_size {
+            if let Some(old) = self.chunks.pop_front() {
+                evicted += old.len();
+                self.current_size -= old.len();
+            } else {
+                break;
+            }
+        }
+
+        if evicted > 0 {
+            debug!(
+                evicted_bytes = evicted,
+                new_size = self.current_size + data_len,
+                "Evicted old output data to make room"
+            );
+        }
+
+        // Warn if approaching limit
+        let utilization = (self.current_size + data_len) as f32 / self.max_size as f32;
+        if utilization > BUFFER_WARNING_THRESHOLD && !self.warned {
+            warn!(
+                utilization_pct = format!("{:.1}%", utilization * 100.0),
+                current_size = self.current_size + data_len,
+                max_size = self.max_size,
+                "Output buffer approaching size limit"
+            );
+            self.warned = true;
+        }
+
+        // Reset warning flag if we're back below threshold
+        if utilization < BUFFER_WARNING_THRESHOLD * 0.9 {
+            self.warned = false;
+        }
+
+        self.chunks.push_back(data);
+        self.current_size += data_len;
+
+        evicted
+    }
+
+    /// Get all data as a single byte vector.
+    ///
+    /// Note: This allocates a new vector. For large buffers, consider
+    /// using `chunks()` for iteration instead.
+    pub fn get_data(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(self.current_size);
+        for chunk in &self.chunks {
+            result.extend_from_slice(chunk);
+        }
+        result
+    }
+
+    /// Get data as a UTF-8 string if possible.
+    pub fn get_string(&self) -> Result<String, std::string::FromUtf8Error> {
+        String::from_utf8(self.get_data())
+    }
+
+    /// Get data as a lossy UTF-8 string (invalid bytes replaced with U+FFFD).
+    pub fn get_string_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.get_data()).into_owned()
+    }
+
+    /// Clear all buffered data.
+    pub fn clear(&mut self) {
+        self.chunks.clear();
+        self.current_size = 0;
+        self.warned = false;
+    }
+
+    /// Get current buffer size in bytes.
+    pub fn size(&self) -> usize {
+        self.current_size
+    }
+
+    /// Get maximum buffer size in bytes.
+    pub fn max_size(&self) -> usize {
+        self.max_size
+    }
+
+    /// Get utilization as a percentage.
+    pub fn utilization(&self) -> f32 {
+        self.current_size as f32 / self.max_size as f32 * 100.0
+    }
+
+    /// Get the number of chunks in the buffer.
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+}
+
+impl Default for BoundedOutputBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Status of a PTY session.
@@ -146,7 +401,8 @@ pub struct PtySession {
     status: Arc<AtomicU32>,
     running: Arc<AtomicBool>,
     output_tx: broadcast::Sender<OutputEvent>,
-    output_buffer: Arc<RwLock<String>>,
+    /// SEC-004: Bounded output buffer to prevent memory exhaustion.
+    output_buffer: Arc<RwLock<BoundedOutputBuffer>>,
 }
 
 impl PtySession {
@@ -164,7 +420,8 @@ impl PtySession {
         })?;
 
         let (output_tx, _) = broadcast::channel(256);
-        let output_buffer = Arc::new(RwLock::new(String::new()));
+        // SEC-004: Use bounded buffer to prevent memory exhaustion
+        let output_buffer = Arc::new(RwLock::new(BoundedOutputBuffer::new()));
 
         let session = Self {
             id: id.clone(),
@@ -249,11 +506,9 @@ impl PtySession {
                     Ok(n) => {
                         let data = buf[..n].to_vec();
 
-                        // Update buffer
-                        if let Ok(text) = String::from_utf8(data.clone()) {
-                            if let Ok(mut b) = buffer.try_write() {
-                                b.push_str(&text);
-                            }
+                        // SEC-004: Update bounded buffer
+                        if let Ok(mut b) = buffer.try_write() {
+                            b.append(data.clone());
                         }
 
                         let _ = tx.send(OutputEvent::Stdout(data));
@@ -366,14 +621,29 @@ impl PtySession {
         &self.id
     }
 
-    /// Get accumulated output buffer.
+    /// Get accumulated output buffer as a string.
+    ///
+    /// SEC-004: Uses bounded buffer with maximum size limit.
     pub async fn get_output(&self) -> String {
-        self.output_buffer.read().await.clone()
+        self.output_buffer.read().await.get_string_lossy()
+    }
+
+    /// Get raw output buffer as bytes.
+    pub async fn get_output_bytes(&self) -> Vec<u8> {
+        self.output_buffer.read().await.get_data()
     }
 
     /// Clear the output buffer.
     pub async fn clear_output(&self) {
         self.output_buffer.write().await.clear();
+    }
+
+    /// Get output buffer statistics.
+    ///
+    /// Returns (current_size, max_size, utilization_percent).
+    pub async fn buffer_stats(&self) -> (usize, usize, f32) {
+        let buffer = self.output_buffer.read().await;
+        (buffer.size(), buffer.max_size(), buffer.utilization())
     }
 }
 

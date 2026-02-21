@@ -30,6 +30,9 @@ tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Security
+parking_lot = "0.12"
+
 [[bin]]
 name = "panoptes-api"
 path = "src/main.rs"
