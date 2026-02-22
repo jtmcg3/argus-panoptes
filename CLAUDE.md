@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+It is the year of our Lord 2026. 
+2024 is a stable edition of Rust.
+DO NOT REVERT to the 2021 edition. 
+Please update your knowledge before using new packages.
 This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
