@@ -1,4 +1,4 @@
-//! Specialist agents built on swarms-rs.
+//! Specialist agents for the Argus-Panoptes orchestration system.
 //!
 //! This crate provides specialized agents for different task domains:
 //!
@@ -11,7 +11,7 @@
 //!
 //! # Architecture
 //!
-//! Each agent is a swarms-rs `Agent` with domain-specific:
+//! Each agent implements the `Agent` trait with domain-specific:
 //! - System prompts
 //! - Tool bindings (via MCP)
 //! - Memory access patterns

@@ -3,7 +3,7 @@
 //! SEC-010: Working directory validation to prevent path traversal attacks.
 
 use crate::{PanoptesError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Configuration for path security validation (SEC-010).
 #[derive(Debug, Clone)]
@@ -52,6 +52,17 @@ pub fn validate_working_dir(
 
     // Attempt to canonicalize (resolve symlinks, normalize)
     let path = PathBuf::from(dir);
+
+    // Reject dangling symbolic links (symlinks whose target doesn't exist)
+    // Valid symlinks (e.g., /tmp -> /private/tmp) are allowed; canonicalize()
+    // below resolves them to real paths for the allowed_base_dirs check.
+    if path.symlink_metadata().map(|m| m.is_symlink()).unwrap_or(false) && !path.exists() {
+        return Err(PanoptesError::Config(format!(
+            "Working directory '{}' is a dangling symbolic link",
+            dir
+        )));
+    }
+
     let canonical = if path.exists() {
         path.canonicalize().map_err(|e| {
             PanoptesError::Config(format!(
@@ -60,8 +71,26 @@ pub fn validate_working_dir(
             ))
         })?
     } else {
-        // Path doesn't exist yet — validate structurally
-        path.clone()
+        // For non-existent paths, canonicalize the parent to resolve symlinks
+        if let Some(parent) = path.parent() {
+            if parent.as_os_str().is_empty() || parent == Path::new(".") {
+                // Relative path with no real parent - use as-is
+                path.clone()
+            } else if parent.exists() {
+                let canonical_parent = parent.canonicalize().map_err(|e| {
+                    PanoptesError::Config(format!(
+                        "Failed to resolve parent of '{}': {}", dir, e
+                    ))
+                })?;
+                canonical_parent.join(path.file_name().unwrap_or_default())
+            } else {
+                return Err(PanoptesError::Config(format!(
+                    "Parent directory of '{}' does not exist", dir
+                )));
+            }
+        } else {
+            path.clone()
+        }
     };
 
     // Check against allowed base directories (if configured)

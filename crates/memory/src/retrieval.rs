@@ -133,6 +133,9 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        match s.char_indices().nth(max_len) {
+            Some((idx, _)) => format!("{}...", &s[..idx]),
+            None => s.to_string(),
+        }
     }
 }

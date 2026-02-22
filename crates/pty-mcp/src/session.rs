@@ -845,11 +845,9 @@ impl SessionManager {
 
     /// Create a new session.
     pub async fn create(&self, id: &str, working_dir: PathBuf) -> anyhow::Result<Arc<PtySession>> {
-        // Clean up expired sessions first
         self.cleanup_expired().await;
 
-        // Check session limit
-        let sessions = self.sessions.read().await;
+        let mut sessions = self.sessions.write().await;
         if sessions.len() >= self.max_sessions {
             anyhow::bail!(
                 "Session limit reached ({}/{}). Remove existing sessions or wait for expiration.",
@@ -857,11 +855,10 @@ impl SessionManager {
                 self.max_sessions
             );
         }
-        drop(sessions);
 
         let session = Arc::new(PtySession::new(id, working_dir)?);
         let entry = SessionEntry::new(session.clone());
-        self.sessions.write().await.insert(id.to_string(), entry);
+        sessions.insert(id.to_string(), entry);
         info!(session_id = %id, ttl_secs = self.ttl.as_secs(), max_sessions = self.max_sessions, "Created session with TTL");
         Ok(session)
     }

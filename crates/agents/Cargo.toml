@@ -4,15 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Specialist agents built on swarms-rs for research, writing, planning, and coding"
+description = "Specialist agents for research, writing, planning, and coding"
 
 [dependencies]
 panoptes-common = { workspace = true }
 panoptes-memory = { workspace = true }
 panoptes-coordinator = { workspace = true }
-
-# Agent orchestration
-swarms-rs = { workspace = true }
 
 # MCP client (for calling tools)
 rmcp = { workspace = true }

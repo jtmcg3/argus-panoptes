@@ -2,7 +2,7 @@
 
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
-use panoptes_common::{AgentMessage, Result, Task};
+use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::info;
 
@@ -67,7 +67,12 @@ impl Agent for WritingAgent {
             "Processing writing task"
         );
 
-        self.busy.store(true, Ordering::SeqCst);
+        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return Err(PanoptesError::Agent(format!(
+                "Agent {} is busy processing another task",
+                self.id()
+            )));
+        }
 
         // TODO: Implement actual writing
         // 1. Understand the writing request

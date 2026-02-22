@@ -360,15 +360,13 @@ impl Agent for CodingAgent {
             "Processing coding task"
         );
 
-        // Check availability
-        if !self.is_available() {
+        // Atomically claim the agent
+        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return Err(PanoptesError::Agent(format!(
                 "Agent {} is busy processing another task",
                 self.id()
             )));
         }
-
-        self.busy.store(true, Ordering::SeqCst);
 
         // Ensure we're connected to PTY-MCP
         if let Err(e) = self.ensure_connected().await {

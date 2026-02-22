@@ -2,7 +2,7 @@
 
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
-use panoptes_common::{AgentMessage, Result, Task};
+use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::info;
 
@@ -68,7 +68,12 @@ impl Agent for ReviewAgent {
             "Processing review task"
         );
 
-        self.busy.store(true, Ordering::SeqCst);
+        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return Err(PanoptesError::Agent(format!(
+                "Agent {} is busy processing another task",
+                self.id()
+            )));
+        }
 
         // TODO: Implement actual review
         // 1. Get files to review (from task context or git diff)

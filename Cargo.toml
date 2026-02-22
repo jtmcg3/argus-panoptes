@@ -33,9 +33,6 @@ zeroclaw = { git = "https://github.com/zeroclaw-labs/zeroclaw.git", branch = "ma
 # External: Argus PTY components (reference for extraction)
 # argus = { path = "../argus" }
 
-# Agent orchestration
-swarms-rs = "0.1"
-
 # MCP Protocol
 rmcp = "0.1"
 

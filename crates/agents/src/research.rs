@@ -321,7 +321,10 @@ impl ResearchAgent {
 
         // Limit content length
         let html = if html.len() > self.research_config.max_content_length {
-            html[..self.research_config.max_content_length].to_string()
+            match html.char_indices().nth(self.research_config.max_content_length) {
+                Some((idx, _)) => html[..idx].to_string(),
+                None => html,
+            }
         } else {
             html
         };
@@ -378,7 +381,10 @@ impl ResearchAgent {
 
         // Truncate if too long
         let text = if text.len() > 5000 {
-            format!("{}...", &text[..5000])
+            match text.char_indices().nth(5000) {
+                Some((idx, _)) => format!("{}...", &text[..idx]),
+                None => text,
+            }
         } else {
             text
         };
@@ -575,14 +581,12 @@ impl Agent for ResearchAgent {
             "Processing research task"
         );
 
-        if !self.is_available() {
+        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return Err(PanoptesError::Agent(format!(
                 "Agent {} is busy processing another task",
                 self.id()
             )));
         }
-
-        self.busy.store(true, Ordering::SeqCst);
         let result = self.execute_research(task).await;
         self.busy.store(false, Ordering::SeqCst);
 
@@ -614,7 +618,11 @@ mod urlencoding {
             .map(|c| match c {
                 'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
                 ' ' => "+".to_string(),
-                _ => format!("%{:02X}", c as u8),
+                _ => {
+                    let mut buf = [0u8; 4];
+                    let encoded = c.encode_utf8(&mut buf);
+                    encoded.bytes().map(|b| format!("%{:02X}", b)).collect::<String>()
+                }
             })
             .collect()
     }

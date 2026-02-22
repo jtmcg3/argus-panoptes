@@ -115,9 +115,9 @@ impl Default for MemoryAccessControl {
 pub struct MemoryStore {
     config: MemoryConfig,
     working_memory: Arc<RwLock<VecDeque<Memory>>>,
-    db: Connection,
+    db: Arc<Connection>,
     table: Option<Table>,
-    embedding_service: EmbeddingService,
+    embedding_service: Arc<EmbeddingService>,
 }
 
 impl MemoryStore {
@@ -151,9 +151,9 @@ impl MemoryStore {
         let mut store = Self {
             config,
             working_memory: Arc::new(RwLock::new(VecDeque::new())),
-            db,
+            db: Arc::new(db),
             table: None,
-            embedding_service,
+            embedding_service: Arc::new(embedding_service),
         };
 
         // Initialize or open the memories table
@@ -426,7 +426,8 @@ impl MemoryStore {
     /// Clone necessary parts for persistence in a spawned task
     fn clone_for_persist(&self) -> MemoryStorePersister {
         MemoryStorePersister {
-            db_path: self.config.db_path.clone(),
+            db: Arc::clone(&self.db),
+            embedding_service: Arc::clone(&self.embedding_service),
             embedding_dim: self.config.embedding_dim,
         }
     }
@@ -757,22 +758,20 @@ impl MemoryStore {
 }
 
 /// Helper struct for persisting memories in spawned tasks.
+///
+/// Shares DB connection and embedding service with the parent MemoryStore
+/// via Arc, avoiding the cost of creating new connections per eviction.
 struct MemoryStorePersister {
-    db_path: std::path::PathBuf,
+    db: Arc<Connection>,
+    embedding_service: Arc<EmbeddingService>,
     embedding_dim: usize,
 }
 
 impl MemoryStorePersister {
     async fn persist_internal(&self, memory: &Memory) -> anyhow::Result<()> {
-        // Open a new connection for this task
-        let db = lancedb::connect(self.db_path.to_string_lossy().as_ref())
-            .execute()
-            .await?;
-        let table = db.open_table(MEMORIES_TABLE).execute().await?;
+        let table = self.db.open_table(MEMORIES_TABLE).execute().await?;
 
-        // Create embedding service
-        let embedding_service = EmbeddingService::default();
-        let embedding = embedding_service.embed(&memory.content).await?;
+        let embedding = self.embedding_service.embed(&memory.content).await?;
 
         // Create schema
         let schema = Arc::new(Schema::new(vec![

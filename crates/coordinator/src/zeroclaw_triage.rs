@@ -413,30 +413,30 @@ impl ZeroClawTriageAgent {
 
 /// Extract a JSON object from a string that may contain other text.
 fn extract_json_object(s: &str) -> Option<&str> {
-    // Find the first '{' and matching '}'
     let start = s.find('{')?;
     let mut depth = 0;
-    let mut end = start;
+    let mut in_string = false;
+    let mut escape_next = false;
 
     for (i, c) in s[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
         match c {
-            '{' => depth += 1,
-            '}' => {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    end = start + i + 1;
-                    break;
+                    return Some(&s[start..start + i + 1]);
                 }
             }
             _ => {}
         }
     }
-
-    if depth == 0 && end > start {
-        Some(&s[start..end])
-    } else {
-        None
-    }
+    None
 }
 
 #[cfg(test)]

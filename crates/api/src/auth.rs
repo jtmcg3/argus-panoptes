@@ -14,10 +14,18 @@ use axum::{
 use tracing::warn;
 
 /// Configuration for API key authentication.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiKeyConfig {
     /// The expected API key (stored for constant-time comparison).
     key_bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for ApiKeyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyConfig")
+            .field("key_bytes", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ApiKeyConfig {
@@ -30,15 +38,18 @@ impl ApiKeyConfig {
 
     /// Constant-time comparison to prevent timing attacks.
     fn verify(&self, provided: &[u8]) -> bool {
-        if self.key_bytes.len() != provided.len() {
-            return false;
-        }
-        // XOR all bytes and accumulate — constant time regardless of where mismatch occurs
+        // Always iterate over the longer of the two to prevent length leaking
+        let max_len = self.key_bytes.len().max(provided.len());
         let mut result: u8 = 0;
-        for (a, b) in self.key_bytes.iter().zip(provided.iter()) {
+
+        for i in 0..max_len {
+            let a = self.key_bytes.get(i).copied().unwrap_or(0);
+            let b = provided.get(i).copied().unwrap_or(0);
             result |= a ^ b;
         }
-        result == 0
+
+        // Both length AND content must match
+        self.key_bytes.len() == provided.len() && result == 0
     }
 }
 
