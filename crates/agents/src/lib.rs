@@ -45,9 +45,9 @@ pub mod writing;
 
 pub use coding::{CodingAgent, ConfirmationPolicy};
 pub use planning::PlanningAgent;
-pub use research::ResearchAgent;
+pub use research::{ResearchAgent, ResearchConfig, SearchResult, WebContent};
 pub use review::ReviewAgent;
 pub use testing::TestingAgent;
-pub use traits::{Agent, AgentCapability};
+pub use traits::{Agent, AgentCapability, AgentConfig};
 pub use workflow::{ConcurrentWorkflow, SequentialWorkflow, StepResult, Workflow, WorkflowResult};
 pub use writing::WritingAgent;

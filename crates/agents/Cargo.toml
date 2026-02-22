@@ -35,3 +35,12 @@ anyhow = { workspace = true }
 
 # UUID generation
 uuid = { workspace = true }
+
+# HTTP client for web research
+reqwest = { workspace = true }
+
+# HTML parsing
+scraper = { workspace = true }
+
+# URL handling
+url = { workspace = true }
