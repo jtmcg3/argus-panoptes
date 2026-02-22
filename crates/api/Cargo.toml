@@ -9,6 +9,7 @@ description = "REST/WebSocket API gateway for Argus-Panoptes"
 [dependencies]
 panoptes-common = { workspace = true }
 panoptes-coordinator = { workspace = true }
+panoptes-agents = { workspace = true }
 
 # Web framework
 axum = { version = "0.8", features = ["macros", "ws"] }

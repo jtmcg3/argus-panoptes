@@ -1,6 +1,15 @@
 //! HTTP route handlers for the API.
 //!
 //! SEC-006: All endpoints implement rate limiting and input validation.
+//!
+//! # Agent Endpoints
+//!
+//! Each specialist agent has a dedicated endpoint:
+//! - `POST /api/v1/coding` - Coding tasks via PTY-MCP
+//! - `POST /api/v1/research` - Web search and research
+//! - `POST /api/v1/writing` - Content and document creation
+//! - `POST /api/v1/planning` - Task planning and breakdown
+//! - `POST /api/v1/workflow` - Multi-agent workflow orchestration
 
 use crate::rate_limit::{RateLimitStats, WebSocketGuard};
 use crate::AppState;
@@ -10,7 +19,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use panoptes_common::AgentMessage;
+use panoptes_agents::Agent;
+use panoptes_common::{AgentMessage, Task};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,6 +78,111 @@ impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
     }
+}
+
+// ============================================================================
+// Agent-specific request/response types
+// ============================================================================
+
+/// Request body for agent endpoints.
+///
+/// This unified request type works for all specialist agents.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentRequest {
+    /// The instruction or task description for the agent.
+    pub instruction: String,
+
+    /// Working directory for code-related tasks.
+    #[serde(default)]
+    pub working_dir: Option<String>,
+
+    /// Additional context to provide to the agent.
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+/// Response from an agent endpoint.
+#[derive(Debug, Serialize)]
+pub struct AgentResponse {
+    /// Unique ID for this request.
+    pub id: String,
+
+    /// Status of the request: "running", "completed", "failed".
+    pub status: String,
+
+    /// Output from the agent.
+    pub output: String,
+
+    /// Session ID for PTY sessions (coding agent only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+
+    /// Execution time in milliseconds.
+    pub duration_ms: u64,
+}
+
+/// Request body for workflow execution.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkflowRequest {
+    /// The instruction or task description.
+    pub instruction: String,
+
+    /// Working directory for code-related tasks.
+    #[serde(default)]
+    pub working_dir: Option<String>,
+
+    /// Additional context to provide to agents.
+    #[serde(default)]
+    pub context: Option<String>,
+
+    /// Agent IDs to include in the workflow (in order for sequential).
+    pub agents: Vec<String>,
+
+    /// Workflow mode: "sequential" or "concurrent".
+    #[serde(default = "default_workflow_mode")]
+    pub mode: String,
+}
+
+fn default_workflow_mode() -> String {
+    "sequential".into()
+}
+
+/// Response from a workflow execution.
+#[derive(Debug, Serialize)]
+pub struct WorkflowResponse {
+    /// Unique workflow execution ID.
+    pub id: String,
+
+    /// Overall status: "completed", "partial", "failed".
+    pub status: String,
+
+    /// Combined output from all agents.
+    pub output: String,
+
+    /// Results from each step.
+    pub steps: Vec<WorkflowStepResponse>,
+
+    /// Total execution time in milliseconds.
+    pub duration_ms: u64,
+}
+
+/// Response for a single workflow step.
+#[derive(Debug, Serialize)]
+pub struct WorkflowStepResponse {
+    /// Agent ID.
+    pub agent_id: String,
+
+    /// Agent name.
+    pub agent_name: String,
+
+    /// Whether this step succeeded.
+    pub success: bool,
+
+    /// Output from this step.
+    pub output: String,
+
+    /// Execution time for this step.
+    pub duration_ms: u64,
 }
 
 /// Rate limited error response.
@@ -387,6 +502,540 @@ async fn handle_websocket(
         "WebSocket connection closed"
     );
     // _guard drops here, releasing the connection slot
+}
+
+// ============================================================================
+// Agent-specific endpoints
+// ============================================================================
+
+/// Maximum agent request size (SEC-006).
+const MAX_AGENT_REQUEST_SIZE: usize = 500_000; // 500KB
+
+/// Default timeout for agent requests.
+const AGENT_REQUEST_TIMEOUT_SECS: u64 = 300; // 5 minutes
+
+/// Handle coding agent requests.
+///
+/// POST /api/v1/coding
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn coding_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    // SEC-006: Check rate limit
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for coding request");
+        return Err(rate_limited_response());
+    }
+
+    // SEC-006: Check content size
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received coding request"
+    );
+
+    // Get the coding agent
+    let agent = match state.agents.coding.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Coding agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    // Build task from request
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref dir) = request.working_dir {
+        task = task.with_working_dir(dir);
+    }
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    // Execute with timeout
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        error!(ip = %client_ip, "Coding request timed out");
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        error!(error = %e, "Coding agent failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: result.task_id,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle research agent requests.
+///
+/// POST /api/v1/research
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn research_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for research request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received research request"
+    );
+
+    let agent = match state.agents.research.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Research agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: None,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle writing agent requests.
+///
+/// POST /api/v1/writing
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn writing_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for writing request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received writing request"
+    );
+
+    let agent = match state.agents.writing.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Writing agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: None,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle planning agent requests.
+///
+/// POST /api/v1/planning
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn planning_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for planning request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received planning request"
+    );
+
+    let agent = match state.agents.planning.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Planning agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: None,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle workflow execution requests.
+///
+/// POST /api/v1/workflow
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn workflow_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<WorkflowRequest>,
+) -> Result<Json<WorkflowResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use panoptes_agents::{ConcurrentWorkflow, SequentialWorkflow, Workflow};
+
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for workflow request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    if request.agents.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Workflow must specify at least one agent".into(),
+                code: "INVALID_REQUEST",
+            }),
+        ));
+    }
+
+    info!(
+        ip = %client_ip,
+        agents = ?request.agents,
+        mode = %request.mode,
+        "Received workflow request"
+    );
+
+    // Collect requested agents
+    let mut agents_list: Vec<Arc<dyn panoptes_agents::Agent>> = Vec::new();
+    for agent_id in &request.agents {
+        match agent_id.as_str() {
+            "coding" => {
+                if let Some(ref agent) = state.agents.coding {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            "research" => {
+                if let Some(ref agent) = state.agents.research {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            "writing" => {
+                if let Some(ref agent) = state.agents.writing {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            "planning" => {
+                if let Some(ref agent) = state.agents.planning {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            "review" => {
+                if let Some(ref agent) = state.agents.review {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            "testing" => {
+                if let Some(ref agent) = state.agents.testing {
+                    agents_list.push(agent.clone() as Arc<dyn panoptes_agents::Agent>);
+                }
+            }
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: format!("Unknown agent: {}", agent_id),
+                        code: "INVALID_AGENT",
+                    }),
+                ));
+            }
+        }
+    }
+
+    if agents_list.len() != request.agents.len() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "One or more requested agents are not available".into(),
+                code: "AGENT_UNAVAILABLE",
+            }),
+        ));
+    }
+
+    // Build task
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref dir) = request.working_dir {
+        task = task.with_working_dir(dir);
+    }
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    // Execute workflow based on mode
+    let workflow_result = match request.mode.as_str() {
+        "concurrent" => {
+            let mut workflow = ConcurrentWorkflow::new("api-workflow");
+            for agent in agents_list {
+                workflow = workflow.add_agent(agent);
+            }
+            tokio::time::timeout(
+                std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS * 2),
+                workflow.run(task.clone()),
+            )
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(ErrorResponse {
+                        error: "Workflow timed out".into(),
+                        code: "TIMEOUT",
+                    }),
+                )
+            })?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Workflow failed: {}", e),
+                        code: "WORKFLOW_ERROR",
+                    }),
+                )
+            })?
+        }
+        _ => {
+            // Default to sequential
+            let mut workflow = SequentialWorkflow::new("api-workflow");
+            for agent in agents_list {
+                workflow = workflow.add_agent(agent);
+            }
+            tokio::time::timeout(
+                std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS * 2),
+                workflow.run(task.clone()),
+            )
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(ErrorResponse {
+                        error: "Workflow timed out".into(),
+                        code: "TIMEOUT",
+                    }),
+                )
+            })?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Workflow failed: {}", e),
+                        code: "WORKFLOW_ERROR",
+                    }),
+                )
+            })?
+        }
+    };
+
+    let steps = workflow_result
+        .step_results
+        .iter()
+        .map(|s| WorkflowStepResponse {
+            agent_id: s.agent_id.clone(),
+            agent_name: s.agent_name.clone(),
+            success: s.success,
+            output: s.output.content.clone(),
+            duration_ms: s.duration_ms,
+        })
+        .collect();
+
+    let status = if workflow_result.success {
+        "completed"
+    } else if workflow_result.step_results.iter().any(|s| s.success) {
+        "partial"
+    } else {
+        "failed"
+    };
+
+    Ok(Json(WorkflowResponse {
+        id: task.id,
+        status: status.into(),
+        output: workflow_result.final_output.content,
+        steps,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
 }
 
 #[cfg(test)]

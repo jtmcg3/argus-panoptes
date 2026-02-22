@@ -5,10 +5,18 @@
 //!
 //! # Endpoints
 //!
+//! ## Core
 //! - `GET /health` - Health check
 //! - `POST /api/v1/messages` - Send a message to the coordinator
 //! - `GET /api/v1/sessions/:id` - Get PTY session status
 //! - `WS /api/v1/ws` - WebSocket for real-time streaming
+//!
+//! ## Specialist Agents
+//! - `POST /api/v1/coding` - Execute coding tasks via PTY-MCP
+//! - `POST /api/v1/research` - Execute research/search tasks
+//! - `POST /api/v1/writing` - Execute content creation tasks
+//! - `POST /api/v1/planning` - Execute planning tasks
+//! - `POST /api/v1/workflow` - Execute multi-agent workflows
 //!
 //! # Security Features
 //!
@@ -20,7 +28,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Client
+//! Client (ZeroClaw/Telegram/etc.)
 //!    │
 //!    ▼
 //! ┌─────────────────┐
@@ -28,10 +36,12 @@
 //! │     (Axum)      │
 //! └────────┬────────┘
 //!          │
-//!          ▼
-//! ┌─────────────────┐
-//! │   Coordinator   │
-//! └─────────────────┘
+//!          ├──────────────────┬──────────────────┐
+//!          ▼                  ▼                  ▼
+//! ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+//! │   Coordinator   │ │  Specialist     │ │   Workflows     │
+//! │    (Triage)     │ │    Agents       │ │                 │
+//! └─────────────────┘ └─────────────────┘ └─────────────────┘
 //! ```
 
 pub mod rate_limit;
@@ -49,7 +59,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub use rate_limit::{RateLimitConfig, RateLimiter};
-pub use state::AppState;
+pub use state::{AgentRegistry, AppState};
 
 /// Create the API router with all routes configured.
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -61,10 +71,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         // Health check
         .route("/health", get(routes::health))
-        // API v1 routes
+        // API v1 - Core routes
         .route("/api/v1/messages", post(routes::send_message))
         .route("/api/v1/sessions/{id}", get(routes::get_session))
         .route("/api/v1/ws", get(routes::websocket_handler))
+        // API v1 - Specialist agent routes
+        .route("/api/v1/coding", post(routes::coding_handler))
+        .route("/api/v1/research", post(routes::research_handler))
+        .route("/api/v1/writing", post(routes::writing_handler))
+        .route("/api/v1/planning", post(routes::planning_handler))
+        .route("/api/v1/workflow", post(routes::workflow_handler))
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(cors)
