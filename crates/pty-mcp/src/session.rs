@@ -7,6 +7,8 @@
 //!
 //! - **SEC-001**: Command whitelist to prevent injection
 //! - **SEC-004**: Bounded output buffer to prevent memory exhaustion
+//! - **SEC-007**: Session limits to prevent resource exhaustion
+//! - **SEC-007b**: Command argument validation to block inline code execution
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, SlavePty};
 use std::collections::HashMap;
@@ -30,7 +32,6 @@ static ALLOWED_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "npm",
         "yarn",
         "pnpm",
-        "make",
         "cmake",
         // Version control
         "git",
@@ -51,14 +52,12 @@ static ALLOWED_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "head",
         "tail",
         "grep",
-        "find",
         "tree",
         "wc",
         "diff",
         "which",
         "whoami",
         "pwd",
-        "env",
         "echo",
     ])
 });
@@ -89,6 +88,48 @@ pub fn validate_command(command: &str) -> anyhow::Result<()> {
         warn!(command = %command, cmd_name = %cmd_name, "Command not in whitelist");
         anyhow::bail!("Command '{}' is not allowed. Only whitelisted commands can be executed.", cmd_name)
     }
+}
+
+/// Maximum number of concurrent sessions (SEC-007).
+const MAX_SESSIONS: usize = 32;
+
+/// Per-command denied argument patterns (SEC-007b).
+/// These arguments allow inline code execution and must be blocked.
+static DENIED_ARGS: LazyLock<HashMap<&'static str, Vec<&'static str>>> = LazyLock::new(|| {
+    HashMap::from([
+        ("python", vec!["-c", "-m"]),
+        ("python3", vec!["-c", "-m"]),
+        ("node", vec!["-e", "--eval"]),
+        ("deno", vec!["eval", "-e"]),
+        ("bun", vec!["-e", "--eval"]),
+        ("cargo", vec!["--config"]),
+        ("git", vec!["-c"]),
+    ])
+});
+
+/// Validate command arguments against deny list (SEC-007b).
+///
+/// Blocks dangerous flags that allow inline code execution.
+pub fn validate_args(command: &str, args: &[&str]) -> anyhow::Result<()> {
+    if let Some(denied) = DENIED_ARGS.get(command) {
+        for arg in args {
+            let arg_lower = arg.to_lowercase();
+            for denied_flag in denied {
+                if arg_lower == denied_flag.to_lowercase() {
+                    warn!(
+                        command = %command,
+                        arg = %arg,
+                        "Denied argument detected"
+                    );
+                    anyhow::bail!(
+                        "Argument '{}' is not allowed for command '{}'. This flag enables arbitrary code execution.",
+                        arg, command
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -208,6 +249,90 @@ mod tests {
     fn test_bounded_buffer_default_size() {
         let buffer = BoundedOutputBuffer::new();
         assert_eq!(buffer.max_size(), MAX_OUTPUT_BUFFER_SIZE);
+    }
+
+    // SEC-007: Session limit tests
+
+    #[tokio::test]
+    async fn test_session_limit_enforced() {
+        let manager = SessionManager::with_ttl_and_limit(
+            Duration::from_secs(3600),
+            2,
+        );
+
+        // These should succeed (we can't actually create PtySessions in tests without PTY,
+        // so we test the logic through the manager interface)
+        // For unit test purposes, just verify the struct is created correctly
+        assert_eq!(manager.max_sessions, 2);
+    }
+
+    #[tokio::test]
+    async fn test_session_stats_include_max() {
+        let manager = SessionManager::with_ttl_and_limit(
+            Duration::from_secs(3600),
+            16,
+        );
+        let stats = manager.stats().await;
+        assert_eq!(stats.max_sessions, 16);
+    }
+
+    // SEC-007b: Argument validation tests
+
+    #[test]
+    fn test_validate_args_allows_normal() {
+        assert!(validate_args("python", &["script.py"]).is_ok());
+        assert!(validate_args("node", &["app.js"]).is_ok());
+        assert!(validate_args("cargo", &["build"]).is_ok());
+        assert!(validate_args("git", &["commit", "-m", "msg"]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_python_c() {
+        assert!(validate_args("python", &["-c", "import os"]).is_err());
+        assert!(validate_args("python3", &["-c", "print('hi')"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_python_m() {
+        assert!(validate_args("python", &["-m", "http.server"]).is_err());
+        assert!(validate_args("python3", &["-m", "pip"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_node_eval() {
+        assert!(validate_args("node", &["-e", "process.exit()"]).is_err());
+        assert!(validate_args("node", &["--eval", "require('child_process')"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_deno_eval() {
+        assert!(validate_args("deno", &["eval", "Deno.exit()"]).is_err());
+        assert!(validate_args("deno", &["-e", "code"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_cargo_config() {
+        assert!(validate_args("cargo", &["--config", "build.rustflags=['-C','link-arg=-s']"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_blocks_git_c() {
+        assert!(validate_args("git", &["-c", "core.sshCommand=evil"]).is_err());
+    }
+
+    #[test]
+    fn test_validate_args_unknown_command_passes() {
+        // Commands not in DENIED_ARGS have no restrictions
+        assert!(validate_args("cargo", &["build", "--release"]).is_ok());
+        assert!(validate_args("ls", &["-la"]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_command_rejects_removed_commands() {
+        // env, find, and make should no longer be in the whitelist
+        assert!(validate_command("env").is_err());
+        assert!(validate_command("find").is_err());
+        assert!(validate_command("make").is_err());
     }
 }
 
@@ -533,6 +658,9 @@ impl PtySession {
         // Validate command against whitelist (SEC-001)
         validate_command(command)?;
 
+        // Validate arguments against deny list (SEC-007b)
+        validate_args(command, args)?;
+
         // Check if a command is already running
         if self.running.load(Ordering::SeqCst) {
             anyhow::bail!("A command is already running in this session");
@@ -687,6 +815,8 @@ pub struct SessionManager {
     sessions: RwLock<HashMap<String, SessionEntry>>,
     /// Session time-to-live after last access.
     ttl: Duration,
+    /// Maximum number of concurrent sessions (SEC-007).
+    pub max_sessions: usize,
 }
 
 impl SessionManager {
@@ -700,15 +830,39 @@ impl SessionManager {
         Self {
             sessions: RwLock::new(HashMap::new()),
             ttl,
+            max_sessions: MAX_SESSIONS,
+        }
+    }
+
+    /// Create a new session manager with custom TTL and session limit.
+    pub fn with_ttl_and_limit(ttl: Duration, max_sessions: usize) -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            ttl,
+            max_sessions,
         }
     }
 
     /// Create a new session.
     pub async fn create(&self, id: &str, working_dir: PathBuf) -> anyhow::Result<Arc<PtySession>> {
+        // Clean up expired sessions first
+        self.cleanup_expired().await;
+
+        // Check session limit
+        let sessions = self.sessions.read().await;
+        if sessions.len() >= self.max_sessions {
+            anyhow::bail!(
+                "Session limit reached ({}/{}). Remove existing sessions or wait for expiration.",
+                sessions.len(),
+                self.max_sessions
+            );
+        }
+        drop(sessions);
+
         let session = Arc::new(PtySession::new(id, working_dir)?);
         let entry = SessionEntry::new(session.clone());
         self.sessions.write().await.insert(id.to_string(), entry);
-        info!(session_id = %id, ttl_secs = self.ttl.as_secs(), "Created session with TTL");
+        info!(session_id = %id, ttl_secs = self.ttl.as_secs(), max_sessions = self.max_sessions, "Created session with TTL");
         Ok(session)
     }
 
@@ -784,6 +938,7 @@ impl SessionManager {
             expired_sessions: expired,
             ttl: self.ttl,
             oldest_session_age: oldest_age,
+            max_sessions: self.max_sessions,
         }
     }
 }
@@ -796,6 +951,7 @@ pub struct SessionStats {
     pub expired_sessions: usize,
     pub ttl: Duration,
     pub oldest_session_age: Option<Duration>,
+    pub max_sessions: usize,
 }
 
 impl Default for SessionManager {

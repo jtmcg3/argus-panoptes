@@ -1,19 +1,23 @@
 //! Application state for the API server.
 
+use crate::auth::ApiKeyConfig;
 use crate::rate_limit::{RateLimitConfig, RateLimiter};
 use panoptes_agents::{
     CodingAgent, PlanningAgent, ResearchAgent, ReviewAgent, TestingAgent, WritingAgent,
 };
 use panoptes_coordinator::{Coordinator, CoordinatorConfig};
+use panoptes_memory::{MemoryConfig, MemoryStore};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::info;
 
 /// Container for all specialist agents.
 pub struct AgentRegistry {
     /// Coding agent (PTY-MCP based).
     pub coding: Option<Arc<CodingAgent>>,
 
-    /// Research agent (web search).
+    /// Research agent (web search with memory).
     pub research: Option<Arc<ResearchAgent>>,
 
     /// Writing agent (content creation).
@@ -62,6 +66,20 @@ impl AgentRegistry {
             ..Self::empty()
         }
     }
+
+    /// Create a registry with memory-enabled research agent.
+    pub fn with_memory(memory_store: Arc<MemoryStore>) -> Self {
+        let research = ResearchAgent::with_default_config().with_memory(Arc::clone(&memory_store));
+
+        Self {
+            coding: Some(Arc::new(CodingAgent::with_default_config())),
+            research: Some(Arc::new(research)),
+            writing: Some(Arc::new(WritingAgent::with_default_config())),
+            planning: Some(Arc::new(PlanningAgent::with_default_config())),
+            review: Some(Arc::new(ReviewAgent::with_default_config())),
+            testing: Some(Arc::new(TestingAgent::with_default_config())),
+        }
+    }
 }
 
 /// Shared application state for the API server.
@@ -77,6 +95,13 @@ pub struct AppState {
 
     /// Specialist agents available for direct invocation.
     pub agents: AgentRegistry,
+
+    /// Shared memory store for knowledge persistence.
+    pub memory_store: Option<Arc<MemoryStore>>,
+
+    /// API key configuration for authentication (SEC-011).
+    /// None = unauthenticated mode (dev/local only).
+    pub api_key_config: Option<ApiKeyConfig>,
 }
 
 impl AppState {
@@ -89,6 +114,49 @@ impl AppState {
             start_time: std::time::Instant::now(),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             agents: AgentRegistry::default(),
+            memory_store: None,
+            api_key_config: None,
+        })
+    }
+
+    /// Set the API key configuration for authentication (SEC-011).
+    pub fn with_api_key(mut self, config: ApiKeyConfig) -> Self {
+        self.api_key_config = Some(config);
+        self
+    }
+
+    /// Create new application state with memory enabled.
+    ///
+    /// This is the recommended way to create AppState for production use,
+    /// as it enables the ResearchAgent to persist findings.
+    pub async fn with_memory(
+        config: CoordinatorConfig,
+        memory_config: MemoryConfig,
+    ) -> anyhow::Result<Self> {
+        let coordinator = Coordinator::new(config)?;
+
+        // Initialize memory store
+        info!(
+            db_path = %memory_config.db_path.display(),
+            "Initializing shared memory store"
+        );
+        let memory_store = Arc::new(MemoryStore::new(memory_config).await?);
+
+        // Warmup embedding model
+        info!("Warming up embedding model...");
+        memory_store.warmup().await?;
+        info!("Embedding model ready");
+
+        // Create agents with shared memory
+        let agents = AgentRegistry::with_memory(Arc::clone(&memory_store));
+
+        Ok(Self {
+            coordinator: Arc::new(RwLock::new(coordinator)),
+            start_time: std::time::Instant::now(),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            agents,
+            memory_store: Some(memory_store),
+            api_key_config: None,
         })
     }
 
@@ -104,6 +172,8 @@ impl AppState {
             start_time: std::time::Instant::now(),
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_config)),
             agents: AgentRegistry::default(),
+            memory_store: None,
+            api_key_config: None,
         })
     }
 
@@ -119,11 +189,49 @@ impl AppState {
             start_time: std::time::Instant::now(),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             agents,
+            memory_store: None,
+            api_key_config: None,
         })
     }
 
     /// Get the uptime in seconds.
     pub fn uptime_seconds(&self) -> u64 {
         self.start_time.elapsed().as_secs()
+    }
+
+    /// Get the memory store if available.
+    pub fn memory(&self) -> Option<&Arc<MemoryStore>> {
+        self.memory_store.as_ref()
+    }
+
+    /// Get memory statistics.
+    pub async fn memory_stats(&self) -> Option<MemoryStats> {
+        if let Some(ref store) = self.memory_store {
+            let count = store.count().await.ok()?;
+            let working_memory = store.get_working_memory().await;
+            Some(MemoryStats {
+                total_memories: count,
+                working_memory_size: working_memory.len(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Statistics about the memory system.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryStats {
+    /// Total memories in LanceDB.
+    pub total_memories: usize,
+    /// Current working memory size.
+    pub working_memory_size: usize,
+}
+
+/// Default memory configuration for the API server.
+pub fn default_memory_config() -> MemoryConfig {
+    MemoryConfig {
+        db_path: PathBuf::from("./data/memory"),
+        ..Default::default()
     }
 }

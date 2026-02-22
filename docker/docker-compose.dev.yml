@@ -1,8 +1,10 @@
 # Development overrides for docker-compose
 # Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# SEC-014: Dev mode relaxes some security restrictions for development workflow.
 
 services:
-  coordinator:
+  api:
     build:
       target: builder  # Use builder stage for faster iteration
     volumes:
@@ -12,6 +14,8 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=debug,panoptes=trace
+    # Dev overrides for security restrictions
+    read_only: false
     command: ["cargo", "watch", "-x", "run"]
 
   pty-mcp:
@@ -23,6 +27,8 @@ services:
       - target-cache:/app/target
     environment:
       - RUST_BACKTRACE=1
+    # Dev overrides for security restrictions
+    read_only: false
     command: ["cargo", "watch", "-x", "run --bin pty-mcp-server"]
 
   ollama:

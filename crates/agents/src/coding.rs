@@ -290,15 +290,23 @@ impl CodingAgent {
                     client.send_confirmation(session_id, true).await?;
                     confirm_count += 1;
                 } else {
-                    // TODO: In the future, this should signal back to the coordinator
-                    // that manual confirmation is needed
-                    warn!(
+                    // SEC-013: Deny actions that require manual confirmation
+                    // When manual confirmation is needed but no human is available,
+                    // we must deny the action and terminate the session to prevent
+                    // unreviewed operations.
+                    error!(
                         agent = %self.id(),
                         session_id = %session_id,
-                        "Manual confirmation required but not implemented - auto-confirming"
+                        confirm_count = confirm_count,
+                        "Manual confirmation required - denying action and terminating session"
                     );
-                    client.send_confirmation(session_id, true).await?;
-                    confirm_count += 1;
+                    client.send_confirmation(session_id, false).await?;
+                    let _ = client.kill_session(session_id).await;
+                    return Err(PanoptesError::Agent(format!(
+                        "Session {} terminated: manual confirmation required but no human operator available. \
+                         The action was denied for safety. Reduce dangerous operations or increase max_auto_confirms.",
+                        session_id
+                    )));
                 }
             }
 

@@ -12,6 +12,9 @@ services:
     environment:
       - RUST_LOG=info,panoptes=debug,tower_http=debug
       - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      - PANOPTES_API_KEY=${PANOPTES_API_KEY}
+      - PANOPTES_BIND_ADDR=0.0.0.0
+      - PANOPTES_CORS_ORIGINS=${PANOPTES_CORS_ORIGINS}
     volumes:
       - ../config:/app/config:ro
       - panoptes-data:/app/data
@@ -20,6 +23,15 @@ services:
     networks:
       - panoptes-net
     restart: unless-stopped
+    # SEC-014: Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+      - /run:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -37,13 +49,23 @@ services:
     environment:
       - RUST_LOG=info,panoptes_pty_mcp=debug
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # For nested container execution
       - workspaces:/workspaces
     networks:
       - panoptes-net
     restart: unless-stopped
-    # Note: PTY requires privileged mode for terminal emulation
-    privileged: true
+    # SEC-014: Security hardening
+    # Removed: privileged: true (was unnecessary)
+    # Removed: /var/run/docker.sock mount (attack surface)
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+      - /run:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_PTRACE  # Required for PTY terminal emulation
 
   # Optional: Ollama for local LLM inference (fallback when OpenAI unavailable)
   # Uncomment if you want local LLM support

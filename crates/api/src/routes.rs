@@ -20,7 +20,7 @@ use axum::{
     Json,
 };
 use panoptes_agents::Agent;
-use panoptes_common::{AgentMessage, Task};
+use panoptes_common::{AgentMessage, PathSecurityConfig, Task, validate_working_dir};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -99,6 +99,12 @@ pub struct AgentRequest {
     /// Additional context to provide to the agent.
     #[serde(default)]
     pub context: Option<String>,
+
+    /// Permission mode for coding tasks (SEC-012).
+    /// Only "act" enables Act mode; everything else defaults to Plan.
+    /// Requires API authentication to use.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 /// Response from an agent endpoint.
@@ -183,6 +189,17 @@ pub struct WorkflowStepResponse {
 
     /// Execution time for this step.
     pub duration_ms: u64,
+}
+
+/// Invalid working directory error response (SEC-010).
+fn invalid_working_dir_response(msg: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: format!("Invalid working directory: {}", msg),
+            code: "INVALID_WORKING_DIR",
+        }),
+    )
 }
 
 /// Rate limited error response.
@@ -544,6 +561,11 @@ pub async fn coding_handler(
         "Received coding request"
     );
 
+    // SEC-010: Validate working directory
+    let path_config = PathSecurityConfig::default();
+    let validated_dir = validate_working_dir(request.working_dir.as_deref(), &path_config)
+        .map_err(|e| invalid_working_dir_response(&e.to_string()))?;
+
     // Get the coding agent
     let agent = match state.agents.coding.as_ref() {
         Some(agent) => agent,
@@ -560,9 +582,7 @@ pub async fn coding_handler(
 
     // Build task from request
     let mut task = Task::new(&request.instruction);
-    if let Some(ref dir) = request.working_dir {
-        task = task.with_working_dir(dir);
-    }
+    task = task.with_working_dir(&validated_dir);
     if let Some(ref ctx) = request.context {
         task = task.with_context(ctx);
     }
@@ -881,6 +901,11 @@ pub async fn workflow_handler(
         "Received workflow request"
     );
 
+    // SEC-010: Validate working directory
+    let path_config = PathSecurityConfig::default();
+    let validated_dir = validate_working_dir(request.working_dir.as_deref(), &path_config)
+        .map_err(|e| invalid_working_dir_response(&e.to_string()))?;
+
     // Collect requested agents
     let mut agents_list: Vec<Arc<dyn panoptes_agents::Agent>> = Vec::new();
     for agent_id in &request.agents {
@@ -937,11 +962,9 @@ pub async fn workflow_handler(
         ));
     }
 
-    // Build task
+    // Build task with validated working directory
     let mut task = Task::new(&request.instruction);
-    if let Some(ref dir) = request.working_dir {
-        task = task.with_working_dir(dir);
-    }
+    task = task.with_working_dir(&validated_dir);
     if let Some(ref ctx) = request.context {
         task = task.with_context(ctx);
     }

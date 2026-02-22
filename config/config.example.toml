@@ -64,6 +64,11 @@ max_context_tokens = 4096
 # Working memory settings
 size = 20  # Max items in hot memory
 
+# Security: Restrict working directories (SEC-010)
+# Requests with working_dir outside these paths will be rejected.
+# Empty list = allow all (dev mode, not recommended for production).
+# allowed_base_dirs = ["/home/user/projects"]
+
 # Directory mappings for project resolution
 [directories]
 argus = "/home/user/projects/argus"

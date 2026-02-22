@@ -171,6 +171,118 @@ Dual-layer architecture:
 - **MCP (Model Context Protocol)**: Tool integration between coordinator and agents
 - **A2A (Agent-to-Agent)**: Inter-agent communication (future)
 
+## Security
+
+Argus-Panoptes includes multiple layers of security hardening for safe deployment.
+
+### Authentication
+
+Set `PANOPTES_API_KEY` to enable bearer token authentication on all API endpoints (except `/health`):
+
+```bash
+export PANOPTES_API_KEY="your-secret-key-here"
+```
+
+Requests must include the header: `Authorization: Bearer <key>`. Without `PANOPTES_API_KEY`, the server runs unauthenticated (suitable for local development only).
+
+### Network Binding
+
+The server binds to `127.0.0.1` (localhost only) by default. To expose externally:
+
+```bash
+# Via environment variable
+export PANOPTES_BIND_ADDR=0.0.0.0
+
+# Via CLI flag (overrides env var)
+panoptes-api --bind 0.0.0.0
+```
+
+A warning is logged when binding to `0.0.0.0`. Always use authentication and a firewall when exposing to the network.
+
+### CORS
+
+CORS is restricted to localhost origins by default. Configure with:
+
+```bash
+# Specific origins (comma-separated)
+export PANOPTES_CORS_ORIGINS="https://app.example.com,https://admin.example.com"
+
+# Wildcard (development only)
+export PANOPTES_CORS_ORIGINS="*"
+```
+
+### Docker
+
+Production Docker containers are hardened with:
+- `read_only: true` filesystem
+- `cap_drop: ALL` (only `SYS_PTRACE` added for PTY service)
+- `security_opt: no-new-privileges:true`
+- No Docker socket mount
+- No privileged mode
+- `tmpfs` for `/tmp` and `/run`
+
+### Working Directory Restrictions
+
+The `allowed_base_dirs` configuration restricts which directories agents can operate in:
+
+```toml
+# In config.toml
+allowed_base_dirs = ["/home/user/projects", "/opt/workspace"]
+```
+
+An empty list (default) allows all directories. Paths containing `..` are always rejected.
+
+### Permission Modes
+
+- **Plan** (default): Agents ask for confirmation before making changes
+- **Act**: Agents proceed without confirmation (only available via authenticated API requests)
+
+Keyword-based triage always uses Plan mode. Act mode cannot be triggered by user input content — it must be explicitly requested via the `permission_mode` API field.
+
+### Rate Limiting
+
+All endpoints enforce per-IP rate limiting:
+- 100 requests per minute (configurable)
+- 50 concurrent connections per IP
+- 10 WebSocket connections per IP
+- 1 MB max request body size
+- 64 KB max WebSocket message size
+
+### Command Whitelist & Argument Validation
+
+PTY sessions only allow whitelisted commands (`claude`, `cargo`, `git`, `python`, etc.). Commands with dangerous flags are blocked:
+
+| Command | Blocked Flags |
+|---------|--------------|
+| `python`/`python3` | `-c`, `-m` |
+| `node` | `-e`, `--eval` |
+| `deno` | `eval`, `-e` |
+| `bun` | `-e`, `--eval` |
+| `cargo` | `--config` |
+| `git` | `-c` |
+
+### Session Limits
+
+PTY sessions are capped at 32 concurrent sessions with a 1-hour TTL. Expired sessions are cleaned up automatically.
+
+### Trust Model
+
+| Boundary | Trust Level | Protection |
+|----------|-------------|------------|
+| External clients | Untrusted | Auth + rate limit + input validation |
+| LLM responses | Semi-trusted | Route whitelist + instruction sanitization |
+| Agent-to-agent | Semi-trusted | Output sanitization + size limits |
+| Internal code | Trusted | Type system + Rust safety |
+
+### Environment Variables
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `PANOPTES_API_KEY` | Recommended | None (unauthenticated) | API authentication key |
+| `PANOPTES_BIND_ADDR` | No | `127.0.0.1` | Server bind address |
+| `PANOPTES_CORS_ORIGINS` | No | localhost only | CORS allowed origins (comma-separated) |
+| `OPENAI_API_KEY` | For ZeroClaw | None | OpenAI API key for LLM triage |
+
 ## Related Projects
 
 - [Argus](https://github.com/jtmcg3/argus) — Original PTY-based Claude CLI wrapper

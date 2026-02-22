@@ -55,7 +55,7 @@ const JAILBREAK_PATTERNS: &[&str] = &[
 /// Check if content contains potential prompt injection patterns.
 ///
 /// SEC-009: Detects common jailbreak/injection phrases.
-fn contains_injection_pattern(content: &str) -> Option<&'static str> {
+pub(crate) fn contains_injection_pattern(content: &str) -> Option<&'static str> {
     let lower = content.to_lowercase();
     for pattern in JAILBREAK_PATTERNS {
         if lower.contains(pattern) {
@@ -80,7 +80,7 @@ fn validate_confidence(confidence: f64) -> f64 {
 /// Sanitize instruction field.
 ///
 /// SEC-009: Checks for suspicious patterns and enforces length limits.
-fn sanitize_instruction(instruction: &str, original_content: &str) -> Result<String> {
+pub(crate) fn sanitize_instruction(instruction: &str, original_content: &str) -> Result<String> {
     // Check length
     if instruction.len() > MAX_INSTRUCTION_LENGTH {
         warn!(

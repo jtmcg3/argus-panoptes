@@ -5,8 +5,10 @@
 
 pub mod error;
 pub mod message;
+pub mod security;
 pub mod task;
 
 pub use error::{PanoptesError, Result};
 pub use message::{AgentMessage, MessageRole};
+pub use security::{PathSecurityConfig, validate_working_dir};
 pub use task::{Task, TaskPriority, TaskStatus};

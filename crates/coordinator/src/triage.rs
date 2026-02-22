@@ -160,7 +160,19 @@ impl Coordinator {
     }
 
     /// Simple keyword-based triage (fallback when ZeroClaw unavailable).
+    ///
+    /// SEC-012: All keyword triage paths use Plan mode. Act mode can only be
+    /// requested via the API's `permission_mode` field (gated behind auth).
     async fn keyword_triage(&self, content: &str) -> Result<RouteDecision> {
+        // SEC-009: Validate input content
+        crate::zeroclaw_triage::validate_input_content(content)?;
+
+        // SEC-009: Sanitize instruction content
+        let sanitized = match crate::zeroclaw_triage::sanitize_instruction(content, content) {
+            Ok(s) => s,
+            Err(_) => content.to_string(),
+        };
+
         let lower = content.to_lowercase();
 
         // Coding/development keywords
@@ -173,20 +185,13 @@ impl Coordinator {
             || lower.contains("write a function")
             || lower.contains("create a")
         {
-            let permission = if lower.contains("just do")
-                || lower.contains("go ahead")
-                || lower.contains("act mode")
-            {
-                crate::routing::PermissionMode::Act
-            } else {
-                crate::routing::PermissionMode::Plan
-            };
-
+            // SEC-012: Always use Plan mode in keyword triage.
+            // Act mode can only be requested via authenticated API endpoint.
             return Ok(RouteDecision {
                 route: AgentRoute::PtyCoding {
-                    instruction: content.to_string(),
+                    instruction: sanitized.clone(),
                     working_dir: self.config.default_working_dir.as_ref().map(|p| p.display().to_string()),
-                    permission_mode: permission,
+                    permission_mode: crate::routing::PermissionMode::Plan,
                 },
                 reasoning: "Detected coding-related request".into(),
                 confidence: 0.75,
@@ -203,7 +208,7 @@ impl Coordinator {
         {
             return Ok(RouteDecision {
                 route: AgentRoute::Research {
-                    query: content.to_string(),
+                    query: sanitized,
                     sources: vec![],
                 },
                 reasoning: "Detected research request".into(),
@@ -221,7 +226,7 @@ impl Coordinator {
             return Ok(RouteDecision {
                 route: AgentRoute::Writing {
                     task_type: crate::routing::WritingTask::Documentation,
-                    context: content.to_string(),
+                    context: sanitized,
                 },
                 reasoning: "Detected writing request".into(),
                 confidence: 0.7,
@@ -238,7 +243,7 @@ impl Coordinator {
             return Ok(RouteDecision {
                 route: AgentRoute::Planning {
                     scope: crate::routing::PlanningScope::Day,
-                    context: content.to_string(),
+                    context: sanitized,
                 },
                 reasoning: "Detected planning request".into(),
                 confidence: 0.7,
@@ -392,6 +397,16 @@ impl Coordinator {
 
         // Generate a unique session ID
         let session_id = self.generate_session_id();
+
+        // SEC-012: Audit log when Act mode is used
+        if matches!(permission_mode, PermissionMode::Act) {
+            warn!(
+                session_id = %session_id,
+                instruction_preview = %instruction.chars().take(100).collect::<String>(),
+                working_dir = %work_dir,
+                "SECURITY AUDIT: Act mode requested — skipping permission checks"
+            );
+        }
 
         info!(
             session_id = %session_id,

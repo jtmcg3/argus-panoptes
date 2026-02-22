@@ -26,6 +26,11 @@ pub struct CoordinatorConfig {
     /// Default working directory
     #[serde(default)]
     pub default_working_dir: Option<PathBuf>,
+
+    /// Allowed base directories for working_dir validation (SEC-010).
+    /// Empty vec = allow all (dev mode fallback).
+    #[serde(default)]
+    pub allowed_base_dirs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +129,7 @@ impl Default for CoordinatorConfig {
                 max_context_tokens: default_max_context(),
             },
             default_working_dir: None,
+            allowed_base_dirs: Vec::new(),
         }
     }
 }
