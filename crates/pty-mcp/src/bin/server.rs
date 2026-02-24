@@ -14,8 +14,8 @@
 //! Or configure it as an MCP server in your client's configuration.
 
 use panoptes_pty_mcp::PtyMcpServer;
-use rmcp::transport::io::stdio;
 use rmcp::ServiceExt;
+use rmcp::transport::io::stdio;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]

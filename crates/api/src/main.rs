@@ -13,7 +13,7 @@
 //! - `PANOPTES_CORS_ORIGINS` - CORS allowed origins (comma-separated)
 //! - `OPENAI_API_KEY` - OpenAI API key for ZeroClaw triage
 
-use panoptes_api::{ApiKeyConfig, serve, AppState, default_memory_config};
+use panoptes_api::{ApiKeyConfig, AppState, default_memory_config, serve};
 use panoptes_coordinator::CoordinatorConfig;
 use panoptes_memory::MemoryConfig;
 use std::net::SocketAddr;
@@ -78,15 +78,23 @@ async fn main() -> anyhow::Result<()> {
                 println!();
                 println!("Options:");
                 println!("  -p, --port <PORT>        Port to listen on (default: 8080)");
-                println!("  -b, --bind <ADDR>        Bind address (default: 127.0.0.1, env: PANOPTES_BIND_ADDR)");
+                println!(
+                    "  -b, --bind <ADDR>        Bind address (default: 127.0.0.1, env: PANOPTES_BIND_ADDR)"
+                );
                 println!("  -c, --config <FILE>      Path to config.toml file");
                 println!("  -m, --memory             Enable memory persistence for research");
-                println!("      --memory-path <DIR>  Path to LanceDB database (default: ./data/memory)");
+                println!(
+                    "      --memory-path <DIR>  Path to LanceDB database (default: ./data/memory)"
+                );
                 println!("  -h, --help               Show this help message");
                 println!();
                 println!("Environment variables:");
-                println!("  PANOPTES_API_KEY         API authentication key (recommended for production)");
-                println!("  PANOPTES_BIND_ADDR       Server bind address (overridden by --bind flag)");
+                println!(
+                    "  PANOPTES_API_KEY         API authentication key (recommended for production)"
+                );
+                println!(
+                    "  PANOPTES_BIND_ADDR       Server bind address (overridden by --bind flag)"
+                );
                 println!("  PANOPTES_CORS_ORIGINS    CORS allowed origins (comma-separated)");
                 println!("  OPENAI_API_KEY           OpenAI API key for ZeroClaw triage");
                 return Ok(());

@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use panoptes_coordinator::pty_client::{PtyMcpClient, StatusResult};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -156,7 +156,15 @@ impl CodingAgent {
 
     /// Generate a unique session ID for this task.
     fn generate_session_id(&self, task: &Task) -> String {
-        format!("{}-{}", task.id, Uuid::new_v4().to_string().split('-').next().unwrap_or("0000"))
+        format!(
+            "{}-{}",
+            task.id,
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
+        )
     }
 
     /// Build Claude CLI arguments from the task.
@@ -204,15 +212,12 @@ impl CodingAgent {
     }
 
     /// Run a session and collect output.
-    async fn run_session(
-        &self,
-        session_id: &str,
-        task: &Task,
-    ) -> Result<(String, Option<i32>)> {
+    async fn run_session(&self, session_id: &str, task: &Task) -> Result<(String, Option<i32>)> {
         let client = self.pty_client.read().await;
 
         // Get working directory from task or use current dir
-        let working_dir = task.working_dir
+        let working_dir = task
+            .working_dir
             .as_ref()
             .cloned()
             .unwrap_or_else(|| ".".to_string());
@@ -234,7 +239,9 @@ impl CodingAgent {
 
         if !spawn_result.success {
             return Err(PanoptesError::Pty(
-                spawn_result.error.unwrap_or_else(|| "Failed to spawn session".into())
+                spawn_result
+                    .error
+                    .unwrap_or_else(|| "Failed to spawn session".into()),
             ));
         }
 
@@ -361,7 +368,11 @@ impl Agent for CodingAgent {
         );
 
         // Atomically claim the agent
-        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Err(PanoptesError::Agent(format!(
                 "Agent {} is busy processing another task",
                 self.id()
@@ -389,15 +400,15 @@ impl Agent for CodingAgent {
                 message.task_id = Some(task.id.clone());
 
                 // Add exit code to metadata if available
-                if let Some(code) = exit_code {
-                    if code != 0 {
-                        warn!(
-                            agent = %self.id(),
-                            task_id = %task.id,
-                            exit_code = code,
-                            "Session exited with non-zero code"
-                        );
-                    }
+                if let Some(code) = exit_code
+                    && code != 0
+                {
+                    warn!(
+                        agent = %self.id(),
+                        task_id = %task.id,
+                        exit_code = code,
+                        "Session exited with non-zero code"
+                    );
                 }
 
                 info!(

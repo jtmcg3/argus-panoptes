@@ -14,10 +14,7 @@ pub enum AgentRoute {
     },
 
     /// Route to a research agent
-    Research {
-        query: String,
-        sources: Vec<String>,
-    },
+    Research { query: String, sources: Vec<String> },
 
     /// Route to a writing agent
     Writing {
@@ -38,36 +35,24 @@ pub enum AgentRoute {
     },
 
     /// Route to testing agent
-    Testing {
-        target: String,
-        test_type: TestType,
-    },
+    Testing { target: String, test_type: TestType },
 
     /// Direct response (no agent needed)
-    Direct {
-        response: String,
-    },
+    Direct { response: String },
 
     /// Multi-agent workflow (decomposed task)
-    Workflow {
-        tasks: Vec<Task>,
-    },
+    Workflow { tasks: Vec<Task> },
 }
 
 /// Permission mode for coding agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
     /// Review actions before execution
+    #[default]
     Plan,
     /// Execute immediately
     Act,
-}
-
-impl Default for PermissionMode {
-    fn default() -> Self {
-        Self::Plan
-    }
 }
 
 /// Types of writing tasks.

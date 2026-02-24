@@ -3,13 +3,11 @@
 //! These tests verify that agents and workflows work together correctly.
 //! They use mock agents to avoid requiring PTY-MCP server.
 
-use panoptes_agents::{
-    Agent, AgentCapability, ConcurrentWorkflow, SequentialWorkflow, Workflow,
-};
-use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use panoptes_agents::{Agent, AgentCapability, ConcurrentWorkflow, SequentialWorkflow, Workflow};
+use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// A mock agent that simulates work with configurable behavior.
@@ -141,14 +139,26 @@ async fn test_sequential_workflow_context_passing() {
     assert_eq!(agent3.process_count(), 1);
 
     // Later steps should receive context (indicated by "Received context")
-    assert!(result.step_results[1].output.content.contains("Received context"));
-    assert!(result.step_results[2].output.content.contains("Received context"));
+    assert!(
+        result.step_results[1]
+            .output
+            .content
+            .contains("Received context")
+    );
+    assert!(
+        result.step_results[2]
+            .output
+            .content
+            .contains("Received context")
+    );
 }
 
 #[tokio::test]
 async fn test_sequential_workflow_timing() {
-    let agent1 = Arc::new(SimulatedAgent::new("fast", "Fast").with_delay(Duration::from_millis(10)));
-    let agent2 = Arc::new(SimulatedAgent::new("slow", "Slow").with_delay(Duration::from_millis(50)));
+    let agent1 =
+        Arc::new(SimulatedAgent::new("fast", "Fast").with_delay(Duration::from_millis(10)));
+    let agent2 =
+        Arc::new(SimulatedAgent::new("slow", "Slow").with_delay(Duration::from_millis(50)));
 
     let workflow = SequentialWorkflow::new("timing-test")
         .add_agent(agent1)
@@ -172,9 +182,12 @@ async fn test_sequential_workflow_timing() {
 #[tokio::test]
 async fn test_concurrent_workflow_parallel_execution() {
     // Create agents with longer delays
-    let agent1 = Arc::new(SimulatedAgent::new("parallel1", "P1").with_delay(Duration::from_millis(50)));
-    let agent2 = Arc::new(SimulatedAgent::new("parallel2", "P2").with_delay(Duration::from_millis(50)));
-    let agent3 = Arc::new(SimulatedAgent::new("parallel3", "P3").with_delay(Duration::from_millis(50)));
+    let agent1 =
+        Arc::new(SimulatedAgent::new("parallel1", "P1").with_delay(Duration::from_millis(50)));
+    let agent2 =
+        Arc::new(SimulatedAgent::new("parallel2", "P2").with_delay(Duration::from_millis(50)));
+    let agent3 =
+        Arc::new(SimulatedAgent::new("parallel3", "P3").with_delay(Duration::from_millis(50)));
 
     let workflow = ConcurrentWorkflow::new("parallel-test")
         .add_agent(agent1)
@@ -293,12 +306,11 @@ async fn test_workflow_metadata() {
 
 #[tokio::test]
 async fn test_agent_capabilities() {
-    let agent = SimulatedAgent::new("caps", "Done")
-        .with_capabilities(vec![
-            AgentCapability::CodeGeneration,
-            AgentCapability::CodeExecution,
-            AgentCapability::MemoryAccess,
-        ]);
+    let agent = SimulatedAgent::new("caps", "Done").with_capabilities(vec![
+        AgentCapability::CodeGeneration,
+        AgentCapability::CodeExecution,
+        AgentCapability::MemoryAccess,
+    ]);
 
     let caps = agent.capabilities();
     assert_eq!(caps.len(), 3);

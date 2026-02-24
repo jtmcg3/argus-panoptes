@@ -145,7 +145,7 @@ impl EmbeddingService {
                 let mut options = InitOptions::new(self.model_name.clone());
                 options.show_download_progress = true;
                 let model = TextEmbedding::try_new(options)
-                .map_err(|e| EmbeddingError::ModelInit(e.to_string()))?;
+                    .map_err(|e| EmbeddingError::ModelInit(e.to_string()))?;
 
                 info!(
                     model = ?self.model_name,

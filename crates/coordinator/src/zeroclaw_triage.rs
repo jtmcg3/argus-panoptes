@@ -10,7 +10,9 @@
 //! - Input content validation
 
 use crate::config::ProviderConfig;
-use crate::routing::{AgentRoute, PermissionMode, ReviewType, RouteDecision, WritingTask, PlanningScope, TestType};
+use crate::routing::{
+    AgentRoute, PermissionMode, PlanningScope, ReviewType, RouteDecision, TestType, WritingTask,
+};
 use panoptes_common::{PanoptesError, Result};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -21,7 +23,7 @@ use tracing::{debug, info, warn};
 
 /// Valid route values (whitelist).
 const VALID_ROUTES: &[&str] = &[
-    "coding", "research", "writing", "planning", "review", "testing", "direct"
+    "coding", "research", "writing", "planning", "review", "testing", "direct",
 ];
 
 /// Maximum length for instruction field (prevents DoS via large payloads).
@@ -57,12 +59,10 @@ const JAILBREAK_PATTERNS: &[&str] = &[
 /// SEC-009: Detects common jailbreak/injection phrases.
 pub(crate) fn contains_injection_pattern(content: &str) -> Option<&'static str> {
     let lower = content.to_lowercase();
-    for pattern in JAILBREAK_PATTERNS {
-        if lower.contains(pattern) {
-            return Some(pattern);
-        }
-    }
-    None
+    JAILBREAK_PATTERNS
+        .iter()
+        .find(|&&pattern| lower.contains(pattern))
+        .copied()
 }
 
 /// Validate that a route string is in the allowed whitelist.
@@ -98,7 +98,10 @@ pub(crate) fn sanitize_instruction(instruction: &str, original_content: &str) ->
             "Potential prompt injection detected in instruction, using original content"
         );
         // Fall back to original content if instruction looks suspicious
-        return Ok(original_content.chars().take(MAX_INSTRUCTION_LENGTH).collect());
+        return Ok(original_content
+            .chars()
+            .take(MAX_INSTRUCTION_LENGTH)
+            .collect());
     }
 
     Ok(instruction.to_string())
@@ -119,9 +122,7 @@ pub fn validate_input_content(content: &str) -> Result<()> {
     // Check for embedded JSON that might trick the parser
     // This is a heuristic - we warn but allow since legitimate requests might contain JSON
     if content.contains(r#""route":"#) && content.contains(r#""permission_mode":"act""#) {
-        warn!(
-            "Input content contains route/permission JSON - potential injection attempt"
-        );
+        warn!("Input content contains route/permission JSON - potential injection attempt");
         // We don't reject, but log the warning
     }
 
@@ -215,16 +216,15 @@ impl ZeroClawTriageAgent {
         );
 
         // Create OpenAI provider with optional custom base URL
-        let provider: Box<dyn zeroclaw::providers::Provider> = if config.api_url != "https://api.openai.com/v1"
-            && !config.api_url.is_empty()
-        {
-            Box::new(OpenAiProvider::with_base_url(
-                Some(&config.api_url),
-                Some(&api_key),
-            ))
-        } else {
-            Box::new(OpenAiProvider::new(Some(&api_key)))
-        };
+        let provider: Box<dyn zeroclaw::providers::Provider> =
+            if config.api_url != "https://api.openai.com/v1" && !config.api_url.is_empty() {
+                Box::new(OpenAiProvider::with_base_url(
+                    Some(&config.api_url),
+                    Some(&api_key),
+                ))
+            } else {
+                Box::new(OpenAiProvider::new(Some(&api_key)))
+            };
 
         // Create minimal memory (no persistence needed for triage)
         let memory: Arc<dyn zeroclaw::memory::Memory> = Arc::new(NoneMemory::new());
@@ -239,12 +239,12 @@ impl ZeroClawTriageAgent {
         // Build the agent
         let agent = AgentBuilder::new()
             .provider(provider)
-            .tools(vec![])  // No tools needed for triage
+            .tools(vec![]) // No tools needed for triage
             .memory(memory)
             .observer(observer)
             .tool_dispatcher(tool_dispatcher)
             .model_name(config.model.clone())
-            .temperature(0.3)  // Low temperature for consistent routing
+            .temperature(0.3) // Low temperature for consistent routing
             .build()
             .map_err(|e| PanoptesError::Triage(format!("Failed to build ZeroClaw agent: {}", e)))?;
 
@@ -276,11 +276,13 @@ impl ZeroClawTriageAgent {
         // Note: ZeroClaw Agent manages conversation history internally
         let prompt = format!(
             "{}\n\nRoute this request:\n\n{}",
-            TRIAGE_SYSTEM_PROMPT,
-            content
+            TRIAGE_SYSTEM_PROMPT, content
         );
 
-        let response = self.agent.turn(&prompt).await
+        let response = self
+            .agent
+            .turn(&prompt)
+            .await
             .map_err(|e| PanoptesError::Triage(format!("ZeroClaw turn failed: {}", e)))?;
 
         debug!(response = %response, "ZeroClaw response");
@@ -299,17 +301,19 @@ impl ZeroClawTriageAgent {
     fn parse_response(&self, response: &str, original_content: &str) -> Result<RouteDecision> {
         // Try to extract JSON from the response
         // The LLM might include extra text, so we look for JSON object
-        let json_str = extract_json_object(response)
-            .ok_or_else(|| PanoptesError::Triage(format!(
+        let json_str = extract_json_object(response).ok_or_else(|| {
+            PanoptesError::Triage(format!(
                 "No valid JSON found in response: {}",
                 response.chars().take(200).collect::<String>()
-            )))?;
+            ))
+        })?;
 
         let parsed: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| PanoptesError::Triage(format!("Invalid JSON: {}", e)))?;
 
         // SEC-009: Validate route against whitelist
-        let route_str = parsed.get("route")
+        let route_str = parsed
+            .get("route")
             .and_then(|v| v.as_str())
             .unwrap_or("direct");
 
@@ -324,23 +328,30 @@ impl ZeroClawTriageAgent {
         };
 
         // SEC-009: Validate and clamp confidence
-        let confidence = parsed.get("confidence")
+        let confidence = parsed
+            .get("confidence")
             .and_then(|v| v.as_f64())
             .map(validate_confidence)
             .unwrap_or(0.5) as f32;
 
         // SEC-009: Truncate reasoning if too long
-        let reasoning = parsed.get("reasoning")
+        let reasoning = parsed
+            .get("reasoning")
             .and_then(|v| v.as_str())
             .unwrap_or("No reasoning provided");
         let reasoning = if reasoning.len() > MAX_REASONING_LENGTH {
-            reasoning.chars().take(MAX_REASONING_LENGTH).collect::<String>() + "..."
+            reasoning
+                .chars()
+                .take(MAX_REASONING_LENGTH)
+                .collect::<String>()
+                + "..."
         } else {
             reasoning.to_string()
         };
 
         // SEC-009: Sanitize instruction
-        let raw_instruction = parsed.get("instruction")
+        let raw_instruction = parsed
+            .get("instruction")
             .and_then(|v| v.as_str())
             .unwrap_or(original_content);
         let instruction = sanitize_instruction(raw_instruction, original_content)?;
@@ -387,7 +398,9 @@ impl ZeroClawTriageAgent {
                 target: ".".into(),
                 test_type: TestType::Unit,
             },
-            _ => AgentRoute::Direct { response: instruction },
+            _ => AgentRoute::Direct {
+                response: instruction,
+            },
         };
 
         info!(
@@ -489,29 +502,33 @@ mod tests {
                 .map_err(|e| PanoptesError::Triage(format!("Invalid JSON: {}", e)))?;
 
             // SEC-009: Validate route against whitelist
-            let route_str = parsed.get("route")
+            let route_str = parsed
+                .get("route")
                 .and_then(|v| v.as_str())
                 .unwrap_or("direct");
 
             let route_str = if validate_route(route_str) {
                 route_str
             } else {
-                "direct"  // Fall back to direct for invalid routes
+                "direct" // Fall back to direct for invalid routes
             };
 
             // SEC-009: Validate and clamp confidence
-            let confidence = parsed.get("confidence")
+            let confidence = parsed
+                .get("confidence")
                 .and_then(|v| v.as_f64())
                 .map(validate_confidence)
                 .unwrap_or(0.5) as f32;
 
-            let reasoning = parsed.get("reasoning")
+            let reasoning = parsed
+                .get("reasoning")
                 .and_then(|v| v.as_str())
                 .unwrap_or("No reasoning provided")
                 .to_string();
 
             // SEC-009: Sanitize instruction
-            let raw_instruction = parsed.get("instruction")
+            let raw_instruction = parsed
+                .get("instruction")
                 .and_then(|v| v.as_str())
                 .unwrap_or(original_content);
             let instruction = sanitize_instruction(raw_instruction, original_content)?;
@@ -531,8 +548,12 @@ mod tests {
                     query: instruction,
                     sources: vec![],
                 },
-                "direct" => AgentRoute::Direct { response: instruction },
-                _ => AgentRoute::Direct { response: instruction },
+                "direct" => AgentRoute::Direct {
+                    response: instruction,
+                },
+                _ => AgentRoute::Direct {
+                    response: instruction,
+                },
             };
 
             Ok(RouteDecision {
@@ -551,7 +572,13 @@ mod tests {
 
         let decision = agent.parse_response(response, "Fix the parser").unwrap();
 
-        assert!(matches!(decision.route, AgentRoute::PtyCoding { permission_mode: PermissionMode::Plan, .. }));
+        assert!(matches!(
+            decision.route,
+            AgentRoute::PtyCoding {
+                permission_mode: PermissionMode::Plan,
+                ..
+            }
+        ));
         assert_eq!(decision.confidence, 0.9);
         assert_eq!(decision.reasoning, "Bug fix");
     }
@@ -563,7 +590,10 @@ mod tests {
 
         let decision = agent.parse_response(response, "Just go ahead").unwrap();
 
-        if let AgentRoute::PtyCoding { permission_mode, .. } = decision.route {
+        if let AgentRoute::PtyCoding {
+            permission_mode, ..
+        } = decision.route
+        {
             assert_eq!(permission_mode, PermissionMode::Act);
         } else {
             panic!("Expected PtyCoding route");
@@ -584,7 +614,8 @@ mod tests {
     #[test]
     fn test_parse_response_direct_route() {
         let agent = MockTriageAgent;
-        let response = r#"{"route":"direct","confidence":0.99,"reasoning":"Greeting","instruction":"Hello!"}"#;
+        let response =
+            r#"{"route":"direct","confidence":0.99,"reasoning":"Greeting","instruction":"Hello!"}"#;
 
         let decision = agent.parse_response(response, "Hello!").unwrap();
 
@@ -609,12 +640,17 @@ mod tests {
 
         let decision = agent.parse_response(response, "Original").unwrap();
 
-        assert_eq!(decision.confidence, 0.5);  // Default
-        assert_eq!(decision.reasoning, "No reasoning provided");  // Default
+        assert_eq!(decision.confidence, 0.5); // Default
+        assert_eq!(decision.reasoning, "No reasoning provided"); // Default
 
-        if let AgentRoute::PtyCoding { instruction, permission_mode, .. } = decision.route {
-            assert_eq!(instruction, "Original");  // Falls back to original
-            assert_eq!(permission_mode, PermissionMode::Plan);  // Default
+        if let AgentRoute::PtyCoding {
+            instruction,
+            permission_mode,
+            ..
+        } = decision.route
+        {
+            assert_eq!(instruction, "Original"); // Falls back to original
+            assert_eq!(permission_mode, PermissionMode::Plan); // Default
         }
     }
 
@@ -646,7 +682,7 @@ mod tests {
             provider_type: "openai".into(),
             model: "gpt-4o".into(),
             api_url: "https://api.openai.com/v1".into(),
-            api_key: Some("".into()),  // Empty key
+            api_key: Some("".into()), // Empty key
             timeout_ms: 30000,
         };
 
@@ -691,8 +727,8 @@ mod tests {
         assert_eq!(validate_confidence(0.5), 0.5);
         assert_eq!(validate_confidence(0.0), 0.0);
         assert_eq!(validate_confidence(1.0), 1.0);
-        assert_eq!(validate_confidence(-0.5), 0.0);  // Clamped
-        assert_eq!(validate_confidence(1.5), 1.0);   // Clamped
+        assert_eq!(validate_confidence(-0.5), 0.0); // Clamped
+        assert_eq!(validate_confidence(1.5), 1.0); // Clamped
         assert_eq!(validate_confidence(100.0), 1.0); // Clamped
     }
 
@@ -745,7 +781,8 @@ mod tests {
     #[test]
     fn test_parse_response_rejects_invalid_route() {
         let agent = MockTriageAgent;
-        let response = r#"{"route":"shell","confidence":0.9,"reasoning":"Test","instruction":"ls"}"#;
+        let response =
+            r#"{"route":"shell","confidence":0.9,"reasoning":"Test","instruction":"ls"}"#;
 
         let decision = agent.parse_response(response, "List files").unwrap();
 
@@ -756,7 +793,8 @@ mod tests {
     #[test]
     fn test_parse_response_clamps_confidence() {
         let agent = MockTriageAgent;
-        let response = r#"{"route":"coding","confidence":999.0,"reasoning":"Test","instruction":"Test"}"#;
+        let response =
+            r#"{"route":"coding","confidence":999.0,"reasoning":"Test","instruction":"Test"}"#;
 
         let decision = agent.parse_response(response, "Test").unwrap();
 

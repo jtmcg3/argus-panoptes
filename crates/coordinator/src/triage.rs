@@ -21,13 +21,20 @@ pub struct Coordinator {
     triage_agent: Option<RwLock<ZeroClawTriageAgent>>,
 
     // Active tasks being coordinated
-    active_tasks: Arc<RwLock<Vec<Task>>>,
+    _active_tasks: Arc<RwLock<Vec<Task>>>,
 
     // MCP client for PTY sessions
     pty_client: Arc<RwLock<Option<PtyMcpClient>>>,
 
     // Session counter for generating unique session IDs
     session_counter: Arc<std::sync::atomic::AtomicU64>,
+
+    // Specialist agents (using trait from panoptes-common)
+    research_agent: Option<Arc<dyn panoptes_common::Agent>>,
+    writing_agent: Option<Arc<dyn panoptes_common::Agent>>,
+    planning_agent: Option<Arc<dyn panoptes_common::Agent>>,
+    review_agent: Option<Arc<dyn panoptes_common::Agent>>,
+    testing_agent: Option<Arc<dyn panoptes_common::Agent>>,
 }
 
 impl Coordinator {
@@ -68,15 +75,45 @@ impl Coordinator {
         Ok(Self {
             config,
             triage_agent,
-            active_tasks: Arc::new(RwLock::new(Vec::new())),
+            _active_tasks: Arc::new(RwLock::new(Vec::new())),
             pty_client: Arc::new(RwLock::new(None)),
             session_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            research_agent: None,
+            writing_agent: None,
+            planning_agent: None,
+            review_agent: None,
+            testing_agent: None,
         })
     }
 
     /// Check if ZeroClaw triage is available.
     pub fn has_zeroclaw_triage(&self) -> bool {
         self.triage_agent.is_some()
+    }
+
+    /// Set the research agent.
+    pub fn set_research_agent(&mut self, agent: Arc<dyn panoptes_common::Agent>) {
+        self.research_agent = Some(agent);
+    }
+
+    /// Set the writing agent.
+    pub fn set_writing_agent(&mut self, agent: Arc<dyn panoptes_common::Agent>) {
+        self.writing_agent = Some(agent);
+    }
+
+    /// Set the planning agent.
+    pub fn set_planning_agent(&mut self, agent: Arc<dyn panoptes_common::Agent>) {
+        self.planning_agent = Some(agent);
+    }
+
+    /// Set the review agent.
+    pub fn set_review_agent(&mut self, agent: Arc<dyn panoptes_common::Agent>) {
+        self.review_agent = Some(agent);
+    }
+
+    /// Set the testing agent.
+    pub fn set_testing_agent(&mut self, agent: Arc<dyn panoptes_common::Agent>) {
+        self.testing_agent = Some(agent);
     }
 
     /// Initialize and connect to the PTY-MCP server.
@@ -190,7 +227,11 @@ impl Coordinator {
             return Ok(RouteDecision {
                 route: AgentRoute::PtyCoding {
                     instruction: sanitized.clone(),
-                    working_dir: self.config.default_working_dir.as_ref().map(|p| p.display().to_string()),
+                    working_dir: self
+                        .config
+                        .default_working_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string()),
                     permission_mode: crate::routing::PermissionMode::Plan,
                 },
                 reasoning: "Detected coding-related request".into(),
@@ -279,7 +320,7 @@ impl Coordinator {
 
         // Default: direct response
         Ok(RouteDecision::direct(
-            "I'm not sure how to handle this request. Could you provide more context?"
+            "I'm not sure how to handle this request. Could you provide more context?",
         ))
     }
 
@@ -302,58 +343,36 @@ impl Coordinator {
             }
 
             AgentRoute::Research { query, .. } => {
-                // TODO: Call research agent
-                warn!("Research agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Route to Research agent]\nQuery: {}", query),
-                ))
+                self.dispatch_to_agent(&self.research_agent, "research", &query)
+                    .await
             }
 
-            AgentRoute::Writing { task_type, context } => {
-                // TODO: Call writing agent
-                warn!("Writing agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Route to Writing agent]\nType: {:?}\nContext: {}", task_type, context),
-                ))
+            AgentRoute::Writing { context, .. } => {
+                self.dispatch_to_agent(&self.writing_agent, "writing", &context)
+                    .await
             }
 
-            AgentRoute::Planning { scope, context } => {
-                // TODO: Call planning agent
-                warn!("Planning agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Route to Planning agent]\nScope: {:?}\nContext: {}", scope, context),
-                ))
+            AgentRoute::Planning { context, .. } => {
+                self.dispatch_to_agent(&self.planning_agent, "planning", &context)
+                    .await
             }
 
-            AgentRoute::CodeReview { target, review_type } => {
-                // TODO: Call review agent
-                warn!("Review agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Route to Review agent]\nTarget: {}\nType: {:?}", target, review_type),
-                ))
+            AgentRoute::CodeReview {
+                target,
+                review_type,
+            } => {
+                let description = format!("Review {} with {:?} review", target, review_type);
+                self.dispatch_to_agent(&self.review_agent, "review", &description)
+                    .await
             }
 
             AgentRoute::Testing { target, test_type } => {
-                // TODO: Call testing agent
-                warn!("Testing agent not yet connected");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Route to Testing agent]\nTarget: {}\nType: {:?}", target, test_type),
-                ))
+                let description = format!("Run {:?} tests on {}", test_type, target);
+                self.dispatch_to_agent(&self.testing_agent, "testing", &description)
+                    .await
             }
 
-            AgentRoute::Workflow { tasks } => {
-                // TODO: Orchestrate multi-agent workflow
-                warn!("Workflow orchestration not yet implemented");
-                Ok(AgentMessage::from_agent(
-                    "coordinator",
-                    format!("[TODO: Execute workflow with {} tasks]", tasks.len()),
-                ))
-            }
+            AgentRoute::Workflow { tasks } => self.execute_workflow(tasks).await,
         }
     }
 
@@ -361,6 +380,97 @@ impl Coordinator {
     pub async fn process(&self, message: AgentMessage) -> Result<AgentMessage> {
         let decision = self.triage(&message).await?;
         self.execute(decision).await
+    }
+
+    /// Dispatch a task to an optional agent, falling back to a helpful error.
+    async fn dispatch_to_agent(
+        &self,
+        agent: &Option<Arc<dyn panoptes_common::Agent>>,
+        agent_name: &str,
+        description: &str,
+    ) -> Result<AgentMessage> {
+        match agent {
+            Some(a) => {
+                let task = Task::new(description);
+                info!(agent = %a.id(), task_id = %task.id, "Dispatching to agent");
+                a.process_task(&task).await
+            }
+            None => {
+                warn!(agent = %agent_name, "Agent not connected");
+                Ok(AgentMessage::from_agent(
+                    "coordinator",
+                    format!(
+                        "The {} agent is not currently connected. Please configure it first.",
+                        agent_name
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// Execute a multi-step workflow by triaging and dispatching each task sequentially.
+    async fn execute_workflow(&self, tasks: Vec<Task>) -> Result<AgentMessage> {
+        info!(task_count = tasks.len(), "Executing workflow");
+
+        let mut results = Vec::new();
+
+        for task in &tasks {
+            // Triage each sub-task, then dispatch directly to the agent
+            let message = AgentMessage::user(&task.description);
+            let triage_result = self.triage(&message).await;
+
+            let outcome = match triage_result {
+                Ok(decision) => match decision.route {
+                    AgentRoute::Direct { response } => Ok(response),
+                    AgentRoute::Research { query, .. } => self
+                        .dispatch_to_agent(&self.research_agent, "research", &query)
+                        .await
+                        .map(|m| m.content),
+                    AgentRoute::Writing { context, .. } => self
+                        .dispatch_to_agent(&self.writing_agent, "writing", &context)
+                        .await
+                        .map(|m| m.content),
+                    AgentRoute::Planning { context, .. } => self
+                        .dispatch_to_agent(&self.planning_agent, "planning", &context)
+                        .await
+                        .map(|m| m.content),
+                    AgentRoute::CodeReview {
+                        target,
+                        review_type,
+                    } => {
+                        let desc = format!("Review {} with {:?} review", target, review_type);
+                        self.dispatch_to_agent(&self.review_agent, "review", &desc)
+                            .await
+                            .map(|m| m.content)
+                    }
+                    AgentRoute::Testing { target, test_type } => {
+                        let desc = format!("Run {:?} tests on {}", test_type, target);
+                        self.dispatch_to_agent(&self.testing_agent, "testing", &desc)
+                            .await
+                            .map(|m| m.content)
+                    }
+                    _ => Ok(format!(
+                        "Unhandled route for sub-task: {}",
+                        task.description
+                    )),
+                },
+                Err(e) => Err(e),
+            };
+
+            match outcome {
+                Ok(content) => results.push(format!("**{}:** {}", task.description, content)),
+                Err(e) => results.push(format!("**{}:** Error - {}", task.description, e)),
+            }
+        }
+
+        let combined = format!(
+            "# Workflow Results\n\n{}\n\n---\n**Tasks completed:** {}/{}",
+            results.join("\n\n"),
+            results.len(),
+            tasks.len()
+        );
+
+        Ok(AgentMessage::from_agent("coordinator", combined))
     }
 
     /// Execute a PtyCoding route by spawning a Claude CLI session.

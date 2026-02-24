@@ -82,11 +82,7 @@ impl MemoryAccessControl {
             .or_insert_with(HashSet::new)
             .insert(caller.to_string());
 
-        info!(
-            caller = caller,
-            target = target,
-            "Granted memory access"
-        );
+        info!(caller = caller, target = target, "Granted memory access");
     }
 
     /// Revoke `caller`'s access to `target`'s memories.
@@ -94,11 +90,7 @@ impl MemoryAccessControl {
         let mut shared = self.shared_access.write().await;
         if let Some(allowed) = shared.get_mut(target) {
             allowed.remove(caller);
-            info!(
-                caller = caller,
-                target = target,
-                "Revoked memory access"
-            );
+            info!(caller = caller, target = target, "Revoked memory access");
         }
     }
 }
@@ -143,10 +135,9 @@ impl MemoryStore {
         info!("Connected to LanceDB");
 
         // Initialize embedding service from config (validates model + dimension match)
-        let embedding_service = EmbeddingService::from_config(
-            &config.embedding_model,
-            config.embedding_dim,
-        ).map_err(|e| anyhow::anyhow!("Failed to initialize embedding service: {}", e))?;
+        let embedding_service =
+            EmbeddingService::from_config(&config.embedding_model, config.embedding_dim)
+                .map_err(|e| anyhow::anyhow!("Failed to initialize embedding service: {}", e))?;
 
         let mut store = Self {
             config,
@@ -225,23 +216,17 @@ impl MemoryStore {
         )]));
         let content_array: ArrayRef = Arc::new(StringArray::from(vec![memory.content.as_str()]));
         let source_array: ArrayRef = Arc::new(StringArray::from(vec![memory.source.as_str()]));
-        let agent_id_array: ArrayRef = Arc::new(StringArray::from(vec![memory
-            .agent_id
-            .as_deref()]));
-        let task_id_array: ArrayRef =
-            Arc::new(StringArray::from(vec![memory.task_id.as_deref()]));
+        let agent_id_array: ArrayRef =
+            Arc::new(StringArray::from(vec![memory.agent_id.as_deref()]));
+        let task_id_array: ArrayRef = Arc::new(StringArray::from(vec![memory.task_id.as_deref()]));
         let tags_array: ArrayRef = Arc::new(StringArray::from(vec![Some(tags_json.as_str())]));
         let importance_array: ArrayRef = Arc::new(Float32Array::from(vec![memory.importance]));
         let created_at_array: ArrayRef = Arc::new(UInt64Array::from(vec![memory.created_at]));
-        let last_accessed_array: ArrayRef =
-            Arc::new(UInt64Array::from(vec![memory.last_accessed]));
+        let last_accessed_array: ArrayRef = Arc::new(UInt64Array::from(vec![memory.last_accessed]));
         let access_count_array: ArrayRef = Arc::new(UInt32Array::from(vec![memory.access_count]));
 
         // Create the vector embedding as FixedSizeList
-        let vector_array: ArrayRef = create_embedding_array(
-            embedding,
-            self.config.embedding_dim,
-        )?;
+        let vector_array: ArrayRef = create_embedding_array(embedding, self.config.embedding_dim)?;
 
         let batch = RecordBatch::try_new(
             schema,
@@ -491,10 +476,10 @@ impl MemoryStore {
                 .iter()
                 .filter(|m| {
                     // Filter by type if specified
-                    if let Some(mt) = memory_type {
-                        if m.memory_type != mt {
-                            return false;
-                        }
+                    if let Some(mt) = memory_type
+                        && m.memory_type != mt
+                    {
+                        return false;
                     }
                     // Simple keyword match for working memory
                     m.content.to_lowercase().contains(&query.to_lowercase())
@@ -591,10 +576,10 @@ impl MemoryStore {
                     while let Some(batch_result) = stream.next().await {
                         if let Ok(batch) = batch_result {
                             for row in 0..batch.num_rows() {
-                                if let Ok(mem) = self.batch_to_memory(&batch, row) {
-                                    if !results.iter().any(|r| r.id == mem.id) {
-                                        results.push(mem);
-                                    }
+                                if let Ok(mem) = self.batch_to_memory(&batch, row)
+                                    && !results.iter().any(|r| r.id == mem.id)
+                                {
+                                    results.push(mem);
                                 }
                             }
                         }
@@ -636,10 +621,10 @@ impl MemoryStore {
                     while let Some(batch_result) = stream.next().await {
                         if let Ok(batch) = batch_result {
                             for row in 0..batch.num_rows() {
-                                if let Ok(mem) = self.batch_to_memory(&batch, row) {
-                                    if !results.iter().any(|r| r.id == mem.id) {
-                                        results.push(mem);
-                                    }
+                                if let Ok(mem) = self.batch_to_memory(&batch, row)
+                                    && !results.iter().any(|r| r.id == mem.id)
+                                {
+                                    results.push(mem);
                                 }
                             }
                         }
@@ -672,7 +657,10 @@ impl MemoryStore {
         access_control: &MemoryAccessControl,
     ) -> anyhow::Result<Vec<Memory>> {
         // SEC-008: Check authorization
-        if !access_control.can_read(caller_agent_id, target_agent_id).await {
+        if !access_control
+            .can_read(caller_agent_id, target_agent_id)
+            .await
+        {
             warn!(
                 caller = caller_agent_id,
                 target = target_agent_id,
@@ -705,19 +693,19 @@ impl MemoryStore {
         persist: bool,
     ) -> anyhow::Result<()> {
         // SEC-008: Validate that caller can only create memories for themselves
-        if let Some(ref agent_id) = memory.agent_id {
-            if agent_id != caller_agent_id {
-                warn!(
-                    caller = caller_agent_id,
-                    memory_agent = agent_id,
-                    "Attempt to create memory for different agent"
-                );
-                anyhow::bail!(
-                    "Agent '{}' cannot create memories for agent '{}'",
-                    caller_agent_id,
-                    agent_id
-                );
-            }
+        if let Some(ref agent_id) = memory.agent_id
+            && agent_id != caller_agent_id
+        {
+            warn!(
+                caller = caller_agent_id,
+                memory_agent = agent_id,
+                "Attempt to create memory for different agent"
+            );
+            anyhow::bail!(
+                "Agent '{}' cannot create memories for agent '{}'",
+                caller_agent_id,
+                agent_id
+            );
         }
 
         self.add(memory, persist).await
@@ -806,22 +794,16 @@ impl MemoryStorePersister {
         )]));
         let content_array: ArrayRef = Arc::new(StringArray::from(vec![memory.content.as_str()]));
         let source_array: ArrayRef = Arc::new(StringArray::from(vec![memory.source.as_str()]));
-        let agent_id_array: ArrayRef = Arc::new(StringArray::from(vec![memory
-            .agent_id
-            .as_deref()]));
-        let task_id_array: ArrayRef =
-            Arc::new(StringArray::from(vec![memory.task_id.as_deref()]));
+        let agent_id_array: ArrayRef =
+            Arc::new(StringArray::from(vec![memory.agent_id.as_deref()]));
+        let task_id_array: ArrayRef = Arc::new(StringArray::from(vec![memory.task_id.as_deref()]));
         let tags_array: ArrayRef = Arc::new(StringArray::from(vec![Some(tags_json.as_str())]));
         let importance_array: ArrayRef = Arc::new(Float32Array::from(vec![memory.importance]));
         let created_at_array: ArrayRef = Arc::new(UInt64Array::from(vec![memory.created_at]));
-        let last_accessed_array: ArrayRef =
-            Arc::new(UInt64Array::from(vec![memory.last_accessed]));
+        let last_accessed_array: ArrayRef = Arc::new(UInt64Array::from(vec![memory.last_accessed]));
         let access_count_array: ArrayRef = Arc::new(UInt32Array::from(vec![memory.access_count]));
 
-        let vector_array: ArrayRef = create_embedding_array(
-            embedding,
-            self.embedding_dim,
-        )?;
+        let vector_array: ArrayRef = create_embedding_array(embedding, self.embedding_dim)?;
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -887,7 +869,8 @@ fn create_embedding_array(embedding: Vec<f32>, dim: usize) -> anyhow::Result<Arr
         dim as i32,
         Arc::new(values),
         None, // no nulls
-    ).map_err(|e| anyhow::anyhow!("Failed to create embedding array: {}", e))?;
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create embedding array: {}", e))?;
     Ok(Arc::new(array))
 }
 

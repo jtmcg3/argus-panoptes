@@ -56,7 +56,12 @@ pub fn validate_working_dir(
     // Reject dangling symbolic links (symlinks whose target doesn't exist)
     // Valid symlinks (e.g., /tmp -> /private/tmp) are allowed; canonicalize()
     // below resolves them to real paths for the allowed_base_dirs check.
-    if path.symlink_metadata().map(|m| m.is_symlink()).unwrap_or(false) && !path.exists() {
+    if path
+        .symlink_metadata()
+        .map(|m| m.is_symlink())
+        .unwrap_or(false)
+        && !path.exists()
+    {
         return Err(PanoptesError::Config(format!(
             "Working directory '{}' is a dangling symbolic link",
             dir
@@ -78,14 +83,13 @@ pub fn validate_working_dir(
                 path.clone()
             } else if parent.exists() {
                 let canonical_parent = parent.canonicalize().map_err(|e| {
-                    PanoptesError::Config(format!(
-                        "Failed to resolve parent of '{}': {}", dir, e
-                    ))
+                    PanoptesError::Config(format!("Failed to resolve parent of '{}': {}", dir, e))
                 })?;
                 canonical_parent.join(path.file_name().unwrap_or_default())
             } else {
                 return Err(PanoptesError::Config(format!(
-                    "Parent directory of '{}' does not exist", dir
+                    "Parent directory of '{}' does not exist",
+                    dir
                 )));
             }
         } else {

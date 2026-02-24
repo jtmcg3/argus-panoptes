@@ -4,12 +4,12 @@
 //! The `/health` endpoint is exempted from authentication.
 
 use axum::{
+    Json,
     body::Body,
     extract::Request,
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
 use tracing::warn;
 
@@ -104,7 +104,9 @@ pub async fn api_key_auth(
             (
                 StatusCode::UNAUTHORIZED,
                 Json(AuthError {
-                    error: "Missing or invalid Authorization header. Use: Authorization: Bearer <key>".into(),
+                    error:
+                        "Missing or invalid Authorization header. Use: Authorization: Bearer <key>"
+                            .into(),
                     code: "MISSING_API_KEY",
                 }),
             )

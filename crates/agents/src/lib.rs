@@ -35,6 +35,7 @@
 //! ```
 
 pub mod coding;
+pub mod command;
 pub mod planning;
 pub mod research;
 pub mod review;

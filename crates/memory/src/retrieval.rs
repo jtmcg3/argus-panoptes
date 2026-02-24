@@ -116,12 +116,7 @@ fn format_memory(mem: &Memory) -> String {
         MemoryType::Procedural => "Pattern",
     };
 
-    format!(
-        "**[{}]** ({})\n{}",
-        type_str,
-        mem.source,
-        mem.content
-    )
+    format!("**[{}]** ({})\n{}", type_str, mem.source, mem.content)
 }
 
 fn estimate_tokens(text: &str) -> usize {

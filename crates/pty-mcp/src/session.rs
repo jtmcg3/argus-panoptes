@@ -10,15 +10,15 @@
 //! - **SEC-007**: Session limits to prevent resource exhaustion
 //! - **SEC-007b**: Command argument validation to block inline code execution
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, SlavePty};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, SlavePty, native_pty_system};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, LazyLock};
-use tokio::sync::{broadcast, RwLock};
+use std::sync::{Arc, LazyLock, Mutex};
+use tokio::sync::{RwLock, broadcast};
 use tracing::{debug, error, info, warn};
 
 /// Whitelist of allowed commands for PTY sessions (SEC-001).
@@ -26,38 +26,12 @@ use tracing::{debug, error, info, warn};
 static ALLOWED_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     HashSet::from([
         // AI assistants
-        "claude",
-        // Build tools
-        "cargo",
-        "npm",
-        "yarn",
-        "pnpm",
-        "cmake",
-        // Version control
-        "git",
-        // Languages/runtimes
-        "python",
-        "python3",
-        "node",
-        "deno",
-        "bun",
-        "rustc",
-        // Testing
-        "pytest",
-        "jest",
-        "vitest",
-        // Utilities (read-only / safe)
-        "ls",
-        "cat",
-        "head",
-        "tail",
-        "grep",
-        "tree",
-        "wc",
-        "diff",
-        "which",
-        "whoami",
-        "pwd",
+        "claude", // Build tools
+        "cargo", "npm", "yarn", "pnpm", "cmake", // Version control
+        "git",   // Languages/runtimes
+        "python", "python3", "node", "deno", "bun", "rustc", // Testing
+        "pytest", "jest", "vitest", // Utilities (read-only / safe)
+        "ls", "cat", "head", "tail", "grep", "tree", "wc", "diff", "which", "whoami", "pwd",
         "echo",
     ])
 });
@@ -86,7 +60,10 @@ pub fn validate_command(command: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         warn!(command = %command, cmd_name = %cmd_name, "Command not in whitelist");
-        anyhow::bail!("Command '{}' is not allowed. Only whitelisted commands can be executed.", cmd_name)
+        anyhow::bail!(
+            "Command '{}' is not allowed. Only whitelisted commands can be executed.",
+            cmd_name
+        )
     }
 }
 
@@ -123,7 +100,8 @@ pub fn validate_args(command: &str, args: &[&str]) -> anyhow::Result<()> {
                     );
                     anyhow::bail!(
                         "Argument '{}' is not allowed for command '{}'. This flag enables arbitrary code execution.",
-                        arg, command
+                        arg,
+                        command
                     );
                 }
             }
@@ -255,10 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_limit_enforced() {
-        let manager = SessionManager::with_ttl_and_limit(
-            Duration::from_secs(3600),
-            2,
-        );
+        let manager = SessionManager::with_ttl_and_limit(Duration::from_secs(3600), 2);
 
         // These should succeed (we can't actually create PtySessions in tests without PTY,
         // so we test the logic through the manager interface)
@@ -268,10 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_stats_include_max() {
-        let manager = SessionManager::with_ttl_and_limit(
-            Duration::from_secs(3600),
-            16,
-        );
+        let manager = SessionManager::with_ttl_and_limit(Duration::from_secs(3600), 16);
         let stats = manager.stats().await;
         assert_eq!(stats.max_sessions, 16);
     }
@@ -312,7 +284,13 @@ mod tests {
 
     #[test]
     fn test_validate_args_blocks_cargo_config() {
-        assert!(validate_args("cargo", &["--config", "build.rustflags=['-C','link-arg=-s']"]).is_err());
+        assert!(
+            validate_args(
+                "cargo",
+                &["--config", "build.rustflags=['-C','link-arg=-s']"]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -600,7 +578,9 @@ impl PtySession {
                         info!(session_id = %session_id, "PTY reader received EOF");
 
                         // Try to get exit status from child
-                        let exit_code: Option<u32> = if let Ok(mut child_guard) = child_handle.lock() {
+                        let exit_code: Option<u32> = if let Ok(mut child_guard) =
+                            child_handle.lock()
+                        {
                             if let Some(ref mut child) = *child_guard {
                                 match child.try_wait() {
                                     Ok(Some(status)) => {
@@ -686,8 +666,13 @@ impl PtySession {
 
         // Get the slave to spawn the command on
         let slave = {
-            let mut slave_guard = self.slave.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-            slave_guard.take().ok_or_else(|| anyhow::anyhow!("Slave PTY already consumed - session can only spawn one command"))?
+            let mut slave_guard = self
+                .slave
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+            slave_guard.take().ok_or_else(|| {
+                anyhow::anyhow!("Slave PTY already consumed - session can only spawn one command")
+            })?
         };
 
         // Spawn the command on the slave PTY
@@ -704,7 +689,10 @@ impl PtySession {
 
         // Store the child process handle
         {
-            let mut child_guard = self.child.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+            let mut child_guard = self
+                .child
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
             *child_guard = Some(child);
         }
 
@@ -717,8 +705,13 @@ impl PtySession {
 
     /// Write data to the PTY.
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
-        let master = self.master.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        let mut writer = master.take_writer().map_err(|e| anyhow::anyhow!("Writer error: {}", e))?;
+        let master = self
+            .master
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        let mut writer = master
+            .take_writer()
+            .map_err(|e| anyhow::anyhow!("Writer error: {}", e))?;
         use std::io::Write;
         writer.write_all(data)?;
         Ok(())
@@ -880,7 +873,11 @@ impl SessionManager {
     }
 
     /// Get or create a session.
-    pub async fn get_or_create(&self, id: &str, working_dir: PathBuf) -> anyhow::Result<Arc<PtySession>> {
+    pub async fn get_or_create(
+        &self,
+        id: &str,
+        working_dir: PathBuf,
+    ) -> anyhow::Result<Arc<PtySession>> {
         if let Some(session) = self.get(id).await {
             return Ok(session);
         }

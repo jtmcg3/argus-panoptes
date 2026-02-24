@@ -28,54 +28,44 @@ pub enum ParsedState {
     },
 
     /// Tool execution marker
-    ToolExecution {
-        action: String,
-        target: String,
-    },
+    ToolExecution { action: String, target: String },
 
     /// Error detected
-    Error {
-        message: String,
-    },
+    Error { message: String },
 
     /// Session exited
-    Exited {
-        exit_code: Option<i32>,
-    },
+    Exited { exit_code: Option<i32> },
 }
 
 // Regex patterns for Claude CLI output
-static CONFIRM_YN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\[y/n\]|\(y/n\)|yes/no|\[yes/no\]").unwrap()
-});
+static CONFIRM_YN_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\[y/n\]|\(y/n\)|yes/no|\[yes/no\]").unwrap());
 
-static PRESS_ENTER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)press enter|hit enter|continue\?").unwrap()
-});
+static PRESS_ENTER_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)press enter|hit enter|continue\?").unwrap());
 
-static PERMISSION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)allow|permit|proceed|approve|confirm").unwrap()
-});
+static PERMISSION_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)allow|permit|proceed|approve|confirm").unwrap());
 
 static TOOL_MARKER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(Running|Executing|Creating|Reading|Writing|Editing|Deleting):\s*(.+)").unwrap()
+    Regex::new(r"(?i)(Running|Executing|Creating|Reading|Writing|Editing|Deleting):\s*(.+)")
+        .unwrap()
 });
 
-static ERROR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(error|failed|exception|panic)").unwrap()
-});
+static ERROR_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(error|failed|exception|panic)").unwrap());
 
 /// Parser for Claude CLI output.
 pub struct ClaudeParser {
     buffer: String,
-    in_tool_block: bool,
+    _in_tool_block: bool,
 }
 
 impl ClaudeParser {
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
-            in_tool_block: false,
+            _in_tool_block: false,
         }
     }
 
@@ -125,8 +115,14 @@ impl ClaudeParser {
 
             // Check for tool markers
             if let Some(caps) = TOOL_MARKER_PATTERN.captures(&line) {
-                let action = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-                let target = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let action = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let target = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
                 states.push(ParsedState::ToolExecution { action, target });
                 continue;
             }
@@ -171,7 +167,13 @@ mod tests {
         let states = parser.parse(b"Do you want to proceed? [y/N]\n");
 
         assert_eq!(states.len(), 1);
-        matches!(&states[0], ParsedState::NeedsConfirmation { prompt_type: PromptType::YesNo, .. });
+        matches!(
+            &states[0],
+            ParsedState::NeedsConfirmation {
+                prompt_type: PromptType::YesNo,
+                ..
+            }
+        );
     }
 
     #[test]

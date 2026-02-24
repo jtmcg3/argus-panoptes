@@ -212,8 +212,8 @@ fn validate_config_file_permissions(path: &std::path::Path) -> anyhow::Result<()
 
     // Check if file might contain sensitive data
     let content = std::fs::read_to_string(path).unwrap_or_default();
-    let has_api_key = content.contains("api_key")
-        && (content.contains("sk-") || content.contains("key ="));
+    let has_api_key =
+        content.contains("api_key") && (content.contains("sk-") || content.contains("key ="));
 
     // If contains API key, must not be world-readable
     if has_api_key && permission_bits & 0o004 != 0 {
@@ -250,10 +250,10 @@ impl ProviderConfig {
     ///    - "anthropic" -> ANTHROPIC_API_KEY
     pub fn resolve_api_key(&self) -> Option<String> {
         // First check explicit config
-        if let Some(ref key) = self.api_key {
-            if !key.is_empty() {
-                return Some(key.clone());
-            }
+        if let Some(ref key) = self.api_key
+            && !key.is_empty()
+        {
+            return Some(key.clone());
         }
 
         // Fall back to environment variable based on provider type

@@ -105,15 +105,36 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Wire agents from the registry into the coordinator for routing dispatch.
+    fn wire_agents(coordinator: &mut Coordinator, agents: &AgentRegistry) {
+        if let Some(ref agent) = agents.research {
+            coordinator.set_research_agent(Arc::clone(agent) as Arc<dyn panoptes_common::Agent>);
+        }
+        if let Some(ref agent) = agents.writing {
+            coordinator.set_writing_agent(Arc::clone(agent) as Arc<dyn panoptes_common::Agent>);
+        }
+        if let Some(ref agent) = agents.planning {
+            coordinator.set_planning_agent(Arc::clone(agent) as Arc<dyn panoptes_common::Agent>);
+        }
+        if let Some(ref agent) = agents.review {
+            coordinator.set_review_agent(Arc::clone(agent) as Arc<dyn panoptes_common::Agent>);
+        }
+        if let Some(ref agent) = agents.testing {
+            coordinator.set_testing_agent(Arc::clone(agent) as Arc<dyn panoptes_common::Agent>);
+        }
+    }
+
     /// Create new application state with the given coordinator configuration.
     pub fn new(config: CoordinatorConfig) -> panoptes_common::Result<Self> {
-        let coordinator = Coordinator::new(config)?;
+        let mut coordinator = Coordinator::new(config)?;
+        let agents = AgentRegistry::default();
+        Self::wire_agents(&mut coordinator, &agents);
 
         Ok(Self {
             coordinator: Arc::new(RwLock::new(coordinator)),
             start_time: std::time::Instant::now(),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
-            agents: AgentRegistry::default(),
+            agents,
             memory_store: None,
             api_key_config: None,
         })
@@ -133,7 +154,7 @@ impl AppState {
         config: CoordinatorConfig,
         memory_config: MemoryConfig,
     ) -> anyhow::Result<Self> {
-        let coordinator = Coordinator::new(config)?;
+        let mut coordinator = Coordinator::new(config)?;
 
         // Initialize memory store
         info!(
@@ -147,8 +168,9 @@ impl AppState {
         memory_store.warmup().await?;
         info!("Embedding model ready");
 
-        // Create agents with shared memory
+        // Create agents with shared memory and wire into coordinator
         let agents = AgentRegistry::with_memory(Arc::clone(&memory_store));
+        Self::wire_agents(&mut coordinator, &agents);
 
         Ok(Self {
             coordinator: Arc::new(RwLock::new(coordinator)),
@@ -165,13 +187,15 @@ impl AppState {
         config: CoordinatorConfig,
         rate_limit_config: RateLimitConfig,
     ) -> panoptes_common::Result<Self> {
-        let coordinator = Coordinator::new(config)?;
+        let mut coordinator = Coordinator::new(config)?;
+        let agents = AgentRegistry::default();
+        Self::wire_agents(&mut coordinator, &agents);
 
         Ok(Self {
             coordinator: Arc::new(RwLock::new(coordinator)),
             start_time: std::time::Instant::now(),
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_config)),
-            agents: AgentRegistry::default(),
+            agents,
             memory_store: None,
             api_key_config: None,
         })
@@ -182,7 +206,8 @@ impl AppState {
         config: CoordinatorConfig,
         agents: AgentRegistry,
     ) -> panoptes_common::Result<Self> {
-        let coordinator = Coordinator::new(config)?;
+        let mut coordinator = Coordinator::new(config)?;
+        Self::wire_agents(&mut coordinator, &agents);
 
         Ok(Self {
             coordinator: Arc::new(RwLock::new(coordinator)),

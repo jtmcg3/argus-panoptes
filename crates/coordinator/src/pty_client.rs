@@ -5,10 +5,10 @@
 //! manage PTY sessions for coding tasks.
 
 use panoptes_common::{PanoptesError, Result};
+use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParam, CallToolResult, Content, RawContent};
 use rmcp::service::{Peer, RoleClient};
 use rmcp::transport::child_process::TokioChildProcess;
-use rmcp::ServiceExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
@@ -98,10 +98,9 @@ impl PtyMcpClient {
 
         // Create the MCP client by serving on the transport
         // The () handler means we don't handle any server->client requests
-        let running = ()
-            .serve(child_transport)
-            .await
-            .map_err(|e| PanoptesError::Mcp(format!("Failed to establish MCP connection: {}", e)))?;
+        let running = ().serve(child_transport).await.map_err(|e| {
+            PanoptesError::Mcp(format!("Failed to establish MCP connection: {}", e))
+        })?;
 
         // Store the peer for making requests
         let peer = running.peer().clone();
@@ -327,8 +326,9 @@ impl PtyMcpClient {
         }
 
         let text = self.extract_text(&result.content);
-        serde_json::from_str(&text)
-            .map_err(|e| PanoptesError::Mcp(format!("Failed to parse result: {} (text: {})", e, text)))
+        serde_json::from_str(&text).map_err(|e| {
+            PanoptesError::Mcp(format!("Failed to parse result: {} (text: {})", e, text))
+        })
     }
 
     /// Extract text content from MCP content array.
@@ -393,7 +393,10 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let client = PtyMcpClient::new(Some(PathBuf::from("/usr/bin/pty-mcp-server")));
-        assert_eq!(client.server_binary, PathBuf::from("/usr/bin/pty-mcp-server"));
+        assert_eq!(
+            client.server_binary,
+            PathBuf::from("/usr/bin/pty-mcp-server")
+        );
     }
 
     #[test]

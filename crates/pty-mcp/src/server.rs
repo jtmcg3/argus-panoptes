@@ -2,14 +2,14 @@
 
 use crate::session::{SessionManager, SessionStatus};
 use crate::tools::*;
+use rmcp::Error as McpError;
+use rmcp::ServerHandler;
 use rmcp::handler::server::tool::cached_schema_for_type;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
     PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{Peer, RequestContext, RoleServer};
-use rmcp::Error as McpError;
-use rmcp::ServerHandler;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;

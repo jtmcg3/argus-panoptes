@@ -14,8 +14,8 @@ use panoptes_memory::{Memory, MemoryConfig, MemoryRetriever, MemoryStore, Memory
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -144,7 +144,10 @@ impl ResearchAgent {
     /// Search memory for existing knowledge on a topic.
     async fn search_memory(&self, query: &str) -> Vec<Memory> {
         if let Some(ref store) = self.memory_store {
-            match store.search(query, Some(MemoryType::Semantic), Some(5)).await {
+            match store
+                .search(query, Some(MemoryType::Semantic), Some(5))
+                .await
+            {
                 Ok(memories) => {
                     info!(
                         agent = %self.id(),
@@ -222,7 +225,7 @@ impl ResearchAgent {
 
         let response = self
             .http_client
-            .get(&url)
+            .get(url)
             .send()
             .await
             .map_err(|e| PanoptesError::Agent(format!("Search request failed: {}", e)))?;
@@ -243,14 +246,14 @@ impl ResearchAgent {
 
         // Parse DuckDuckGo response
         // Main abstract result
-        if let Some(abstract_text) = data["AbstractText"].as_str() {
-            if !abstract_text.is_empty() {
-                results.push(SearchResult {
-                    title: data["Heading"].as_str().unwrap_or("").to_string(),
-                    url: data["AbstractURL"].as_str().unwrap_or("").to_string(),
-                    snippet: abstract_text.to_string(),
-                });
-            }
+        if let Some(abstract_text) = data["AbstractText"].as_str()
+            && !abstract_text.is_empty()
+        {
+            results.push(SearchResult {
+                title: data["Heading"].as_str().unwrap_or("").to_string(),
+                url: data["AbstractURL"].as_str().unwrap_or("").to_string(),
+                snippet: abstract_text.to_string(),
+            });
         }
 
         // Related topics
@@ -283,8 +286,8 @@ impl ResearchAgent {
     async fn fetch_content(&self, url_str: &str) -> Result<WebContent> {
         debug!(agent = %self.id(), url = %url_str, "Fetching web content");
 
-        let url = Url::parse(url_str)
-            .map_err(|e| PanoptesError::Agent(format!("Invalid URL: {}", e)))?;
+        let url =
+            Url::parse(url_str).map_err(|e| PanoptesError::Agent(format!("Invalid URL: {}", e)))?;
 
         let response = self
             .http_client
@@ -321,7 +324,10 @@ impl ResearchAgent {
 
         // Limit content length
         let html = if html.len() > self.research_config.max_content_length {
-            match html.char_indices().nth(self.research_config.max_content_length) {
+            match html
+                .char_indices()
+                .nth(self.research_config.max_content_length)
+            {
                 Some((idx, _)) => html[..idx].to_string(),
                 None => html,
             }
@@ -374,10 +380,7 @@ impl ResearchAgent {
         }
 
         // Clean up whitespace
-        let text = text
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Truncate if too long
         let text = if text.len() > 5000 {
@@ -509,19 +512,16 @@ impl ResearchAgent {
         }
 
         // Step 4: Synthesize findings
-        let summary = self.synthesize_findings(
-            query,
-            &memory_context,
-            &search_results,
-            &fetched_content,
-        );
+        let summary =
+            self.synthesize_findings(query, &memory_context, &search_results, &fetched_content);
 
         // Step 5: Store key findings in memory
         // Store each search result snippet as a semantic memory
         for result in &search_results {
             if !result.snippet.is_empty() && result.snippet.len() > 50 {
                 let importance = if result.snippet.len() > 200 { 0.8 } else { 0.6 };
-                self.store_finding(&result.snippet, &result.url, importance).await;
+                self.store_finding(&result.snippet, &result.url, importance)
+                    .await;
             }
         }
 
@@ -538,7 +538,8 @@ impl ResearchAgent {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            self.store_finding(&summary_memory, "research-agent", 0.7).await;
+            self.store_finding(&summary_memory, "research-agent", 0.7)
+                .await;
         }
 
         info!(
@@ -581,7 +582,11 @@ impl Agent for ResearchAgent {
             "Processing research task"
         );
 
-        if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Err(PanoptesError::Agent(format!(
                 "Agent {} is busy processing another task",
                 self.id()
@@ -621,7 +626,10 @@ mod urlencoding {
                 _ => {
                     let mut buf = [0u8; 4];
                     let encoded = c.encode_utf8(&mut buf);
-                    encoded.bytes().map(|b| format!("%{:02X}", b)).collect::<String>()
+                    encoded
+                        .bytes()
+                        .map(|b| format!("%{:02X}", b))
+                        .collect::<String>()
                 }
             })
             .collect()

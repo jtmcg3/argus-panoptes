@@ -26,11 +26,11 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            max_requests: 100,                      // 100 requests
-            window: Duration::from_secs(60),        // per minute
-            max_concurrent: 50,                     // 50 concurrent per IP
-            max_body_size: 1024 * 1024,             // 1 MB max body
-            max_websocket_per_ip: 10,               // 10 WebSocket connections per IP
+            max_requests: 100,               // 100 requests
+            window: Duration::from_secs(60), // per minute
+            max_concurrent: 50,              // 50 concurrent per IP
+            max_body_size: 1024 * 1024,      // 1 MB max body
+            max_websocket_per_ip: 10,        // 10 WebSocket connections per IP
         }
     }
 }
@@ -181,9 +181,7 @@ impl RateLimiter {
                 // Remove entries with no recent requests and no active connections
                 entries.retain(|_, entry| {
                     entry.prune(self.config.window);
-                    !entry.requests.is_empty()
-                        || entry.concurrent > 0
-                        || entry.websocket_count > 0
+                    !entry.requests.is_empty() || entry.concurrent > 0 || entry.websocket_count > 0
                 });
 
                 *last = Instant::now();

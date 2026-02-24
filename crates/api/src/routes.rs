@@ -11,13 +11,13 @@
 //! - `POST /api/v1/planning` - Task planning and breakdown
 //! - `POST /api/v1/workflow` - Multi-agent workflow orchestration
 
-use crate::rate_limit::{RateLimitStats, WebSocketGuard};
 use crate::AppState;
+use crate::rate_limit::{RateLimitStats, WebSocketGuard};
 use axum::{
+    Json,
     extract::{ConnectInfo, Path, State, WebSocketUpgrade},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use panoptes_agents::Agent;
 use panoptes_common::{AgentMessage, PathSecurityConfig, Task, validate_working_dir};
@@ -357,7 +357,7 @@ pub async fn get_session(
                         error: format!("Failed to get PTY client: {}", e),
                         code: "PTY_ERROR",
                     }),
-                ))
+                ));
             }
         }
     };
@@ -1117,16 +1117,19 @@ mod tests {
     #[test]
     fn test_message_content_size_check() {
         // Test that the constant is reasonable
-        assert!(MAX_MESSAGE_CONTENT_SIZE > 1000);
-        assert!(MAX_MESSAGE_CONTENT_SIZE < 10_000_000);
+        let size = MAX_MESSAGE_CONTENT_SIZE;
+        assert!(size > 1000);
+        assert!(size < 10_000_000);
     }
 
     #[test]
     fn test_websocket_limits() {
         // Test that WebSocket constants are reasonable
-        assert!(MAX_WS_MESSAGE_SIZE > 1000);
-        assert!(MAX_WS_MESSAGE_SIZE < 1_000_000);
-        assert!(MAX_WS_MESSAGES > 10);
-        assert!(MAX_WS_MESSAGES < 100_000);
+        let msg_size = MAX_WS_MESSAGE_SIZE;
+        let msg_count = MAX_WS_MESSAGES;
+        assert!(msg_size > 1000);
+        assert!(msg_size < 1_000_000);
+        assert!(msg_count > 10);
+        assert!(msg_count < 100_000);
     }
 }
