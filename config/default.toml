@@ -1,7 +1,7 @@
 # Argus-Panoptes Default Configuration
 
 [provider]
-provider_type = "openai"
+provider_type = "ollama"
 model = "lfm2:24b"
 api_url = "http://host.orb.internal:11434"
 timeout_ms = 30000

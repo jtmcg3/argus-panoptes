@@ -134,6 +134,7 @@ use zeroclaw::agent::agent::{Agent, AgentBuilder};
 use zeroclaw::agent::dispatcher::NativeToolDispatcher;
 use zeroclaw::memory::NoneMemory;
 use zeroclaw::observability::NoopObserver;
+use zeroclaw::providers::ollama::OllamaProvider;
 use zeroclaw::providers::openai::OpenAiProvider;
 
 /// System prompt for the triage agent.
@@ -203,28 +204,41 @@ impl ZeroClawTriageAgent {
     /// * `Ok(Self)` - Initialized triage agent
     /// * `Err` - If API key is missing or agent creation fails
     pub fn new(config: &ProviderConfig) -> Result<Self> {
-        let api_key = config.resolve_api_key().ok_or_else(|| {
-            PanoptesError::Config(
-                "OpenAI API key not found. Set OPENAI_API_KEY environment variable or api_key in config.".into()
-            )
-        })?;
-
         info!(
             provider = %config.provider_type,
             model = %config.model,
             "Initializing ZeroClaw triage agent"
         );
 
-        // Create OpenAI provider with optional custom base URL
-        let provider: Box<dyn zeroclaw::providers::Provider> =
-            if config.api_url != "https://api.openai.com/v1" && !config.api_url.is_empty() {
-                Box::new(OpenAiProvider::with_base_url(
-                    Some(&config.api_url),
-                    Some(&api_key),
-                ))
-            } else {
-                Box::new(OpenAiProvider::new(Some(&api_key)))
-            };
+        // Create provider based on type
+        let provider: Box<dyn zeroclaw::providers::Provider> = match config.provider_type.as_str()
+        {
+            "ollama" => {
+                let base_url = if config.api_url.is_empty() {
+                    None
+                } else {
+                    Some(config.api_url.as_str())
+                };
+                Box::new(OllamaProvider::new(base_url, None))
+            }
+            _ => {
+                // OpenAI and other providers require an API key
+                let api_key = config.resolve_api_key().ok_or_else(|| {
+                    PanoptesError::Config(
+                        "API key not found. Set OPENAI_API_KEY environment variable or api_key in config, \
+                         or use provider_type = \"ollama\" for keyless local inference.".into()
+                    )
+                })?;
+                if config.api_url != "https://api.openai.com/v1" && !config.api_url.is_empty() {
+                    Box::new(OpenAiProvider::with_base_url(
+                        Some(&config.api_url),
+                        Some(&api_key),
+                    ))
+                } else {
+                    Box::new(OpenAiProvider::new(Some(&api_key)))
+                }
+            }
+        };
 
         // Create minimal memory (no persistence needed for triage)
         let memory: Arc<dyn zeroclaw::memory::Memory> = Arc::new(NoneMemory::new());
