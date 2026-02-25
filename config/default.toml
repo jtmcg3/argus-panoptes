@@ -2,13 +2,13 @@
 
 [provider]
 provider_type = "openai"
-model = "lfm2-24b-a2b"
+model = "lfm2:24b"
 api_url = "http://host.orb.internal:11434"
 timeout_ms = 30000
 
 [llm]
 provider = "openai"
-model = "lfm2-24b-a2b"
+model = "lfm2:24b"
 api_url = "http://host.orb.internal:11434"
 max_concurrent_requests = 2
 # api_key = "" # not needed for Ollama
