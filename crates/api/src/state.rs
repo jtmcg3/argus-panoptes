@@ -6,6 +6,7 @@ use panoptes_agents::{
     CodingAgent, PlanningAgent, ResearchAgent, ReviewAgent, TestingAgent, WritingAgent,
 };
 use panoptes_coordinator::{Coordinator, CoordinatorConfig};
+use panoptes_llm::{LlmClient, LlmConfig, build_llm_client};
 use panoptes_memory::{MemoryConfig, MemoryStore};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,6 +65,34 @@ impl AgentRegistry {
         Self {
             coding: Some(Arc::new(CodingAgent::with_default_config())),
             ..Self::empty()
+        }
+    }
+
+    /// Create a registry with LLM-enabled agents and optional memory.
+    pub fn with_llm(llm: Arc<dyn LlmClient>, memory: Option<Arc<MemoryStore>>) -> Self {
+        let research = if let Some(ref mem) = memory {
+            ResearchAgent::with_default_config()
+                .with_memory(Arc::clone(mem))
+                .with_llm(Arc::clone(&llm))
+        } else {
+            ResearchAgent::with_default_config().with_llm(Arc::clone(&llm))
+        };
+
+        Self {
+            coding: Some(Arc::new(CodingAgent::with_default_config())),
+            research: Some(Arc::new(research)),
+            writing: Some(Arc::new(
+                WritingAgent::with_default_config().with_llm(Arc::clone(&llm)),
+            )),
+            planning: Some(Arc::new(
+                PlanningAgent::with_default_config().with_llm(Arc::clone(&llm)),
+            )),
+            review: Some(Arc::new(
+                ReviewAgent::with_default_config().with_llm(Arc::clone(&llm)),
+            )),
+            testing: Some(Arc::new(
+                TestingAgent::with_default_config().with_llm(Arc::clone(&llm)),
+            )),
         }
     }
 
@@ -178,6 +207,41 @@ impl AppState {
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             agents,
             memory_store: Some(memory_store),
+            api_key_config: None,
+        })
+    }
+
+    /// Create new application state with LLM support and optional memory.
+    pub async fn with_llm(
+        config: CoordinatorConfig,
+        llm_config: LlmConfig,
+        memory_config: Option<MemoryConfig>,
+    ) -> anyhow::Result<Self> {
+        let mut coordinator = Coordinator::new(config)?;
+
+        // Build LLM client
+        let llm_client = build_llm_client(&llm_config)?;
+
+        // Optionally build memory
+        let (agents, memory_store) = if let Some(mem_config) = memory_config {
+            let store = Arc::new(MemoryStore::new(mem_config).await?);
+            store.warmup().await?;
+            (
+                AgentRegistry::with_llm(llm_client, Some(Arc::clone(&store))),
+                Some(store),
+            )
+        } else {
+            (AgentRegistry::with_llm(llm_client, None), None)
+        };
+
+        Self::wire_agents(&mut coordinator, &agents);
+
+        Ok(Self {
+            coordinator: Arc::new(RwLock::new(coordinator)),
+            start_time: std::time::Instant::now(),
+            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            agents,
+            memory_store,
             api_key_config: None,
         })
     }

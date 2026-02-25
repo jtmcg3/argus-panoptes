@@ -4,11 +4,13 @@
 //! the full lifecycle: spawning, streaming output, handling confirmation
 //! prompts, and collecting results.
 
+use crate::pty_tool::{PtyTool, PtyToolOutput};
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
 use panoptes_coordinator::pty_client::{PtyMcpClient, StatusResult};
-use std::path::PathBuf;
+use panoptes_coordinator::routing::PermissionMode;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -79,6 +81,9 @@ pub struct CodingAgent {
     poll_interval: Duration,
     /// Maximum time to wait for a session to complete
     max_session_duration: Duration,
+    /// Optional pluggable PTY tool. When `Some`, `process_task` delegates
+    /// to this tool instead of the internal PTY-MCP session logic.
+    pty_tool: Option<Arc<dyn PtyTool>>,
 }
 
 impl CodingAgent {
@@ -93,6 +98,7 @@ impl CodingAgent {
             confirmation_policy: ConfirmationPolicy::default(),
             poll_interval: Duration::from_millis(500),
             max_session_duration: Duration::from_secs(600), // 10 minutes default
+            pty_tool: None,
         }
     }
 
@@ -129,6 +135,32 @@ impl CodingAgent {
     pub fn with_max_duration(mut self, duration: Duration) -> Self {
         self.max_session_duration = duration;
         self
+    }
+
+    /// Set a pluggable PTY tool. When set, `process_task` delegates to
+    /// this tool instead of the built-in PTY-MCP session logic.
+    pub fn with_pty_tool(mut self, tool: Arc<dyn PtyTool>) -> Self {
+        self.pty_tool = Some(tool);
+        self
+    }
+
+    /// Execute a task via the pluggable PTY tool.
+    async fn execute_via_pty_tool(&self, tool: &dyn PtyTool, task: &Task) -> Result<PtyToolOutput> {
+        let instruction = match &task.context {
+            Some(ctx) => format!("{}\n\nContext:\n{}", task.description, ctx),
+            None => task.description.clone(),
+        };
+
+        let working_dir = task
+            .working_dir
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new("."));
+
+        // Default to Plan mode
+        let mode = PermissionMode::Plan;
+
+        tool.execute(&instruction, working_dir, mode).await
     }
 
     /// Ensure the PTY-MCP client is connected.
@@ -379,6 +411,50 @@ impl Agent for CodingAgent {
             )));
         }
 
+        // If a pluggable PTY tool is configured, delegate to it.
+        if let Some(ref tool) = self.pty_tool {
+            let result = self.execute_via_pty_tool(tool.as_ref(), task).await;
+            self.busy.store(false, Ordering::SeqCst);
+
+            return match result {
+                Ok(pty_output) => {
+                    let mut message = AgentMessage::from_agent(self.id(), pty_output.content);
+                    message.task_id = Some(task.id.clone());
+
+                    if let Some(code) = pty_output.exit_code
+                        && code != 0
+                    {
+                        warn!(
+                            agent = %self.id(),
+                            task_id = %task.id,
+                            exit_code = code,
+                            "PTY tool exited with non-zero code"
+                        );
+                    }
+
+                    info!(
+                        agent = %self.id(),
+                        task_id = %task.id,
+                        tool = tool.name(),
+                        "Task completed via PTY tool"
+                    );
+
+                    Ok(message)
+                }
+                Err(e) => {
+                    error!(
+                        agent = %self.id(),
+                        task_id = %task.id,
+                        error = %e,
+                        "PTY tool task failed"
+                    );
+                    Err(e)
+                }
+            };
+        }
+
+        // Fallback: use the built-in PTY-MCP session logic.
+
         // Ensure we're connected to PTY-MCP
         if let Err(e) = self.ensure_connected().await {
             self.busy.store(false, Ordering::SeqCst);
@@ -550,5 +626,126 @@ mod tests {
         assert!(id1.starts_with(&task.id));
         // Should be unique
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_with_pty_tool() {
+        use crate::pty_tool::{PtyTool, PtyToolOutput};
+        use panoptes_coordinator::routing::PermissionMode;
+
+        struct FakeTool;
+
+        #[async_trait]
+        impl PtyTool for FakeTool {
+            fn name(&self) -> &str {
+                "fake"
+            }
+            fn supports_mode(&self, _mode: &PermissionMode) -> bool {
+                true
+            }
+            async fn execute(
+                &self,
+                _instruction: &str,
+                _working_dir: &Path,
+                _mode: PermissionMode,
+            ) -> Result<PtyToolOutput> {
+                Ok(PtyToolOutput {
+                    content: "done".into(),
+                    exit_code: Some(0),
+                    session_id: None,
+                })
+            }
+        }
+
+        let agent = CodingAgent::with_default_config().with_pty_tool(Arc::new(FakeTool));
+
+        assert!(agent.pty_tool.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_process_task_with_pty_tool() {
+        use crate::pty_tool::{PtyTool, PtyToolOutput};
+        use panoptes_coordinator::routing::PermissionMode;
+
+        struct EchoTool;
+
+        #[async_trait]
+        impl PtyTool for EchoTool {
+            fn name(&self) -> &str {
+                "echo-tool"
+            }
+            fn supports_mode(&self, _mode: &PermissionMode) -> bool {
+                true
+            }
+            async fn execute(
+                &self,
+                instruction: &str,
+                _working_dir: &Path,
+                _mode: PermissionMode,
+            ) -> Result<PtyToolOutput> {
+                Ok(PtyToolOutput {
+                    content: format!("echo: {}", instruction),
+                    exit_code: Some(0),
+                    session_id: Some("test-session".into()),
+                })
+            }
+        }
+
+        let agent = CodingAgent::with_default_config().with_pty_tool(Arc::new(EchoTool));
+
+        let task = Task::new("fix the parser");
+        let result = agent.process_task(&task).await.unwrap();
+
+        assert_eq!(result.content, "echo: fix the parser");
+        assert_eq!(result.task_id, Some(task.id));
+    }
+
+    #[tokio::test]
+    async fn test_process_task_with_pty_tool_and_context() {
+        use crate::pty_tool::{PtyTool, PtyToolOutput};
+        use panoptes_coordinator::routing::PermissionMode;
+        use std::sync::Mutex;
+
+        struct CaptureTool {
+            captured: Mutex<Option<String>>,
+        }
+
+        #[async_trait]
+        impl PtyTool for CaptureTool {
+            fn name(&self) -> &str {
+                "capture"
+            }
+            fn supports_mode(&self, _mode: &PermissionMode) -> bool {
+                true
+            }
+            async fn execute(
+                &self,
+                instruction: &str,
+                _working_dir: &Path,
+                _mode: PermissionMode,
+            ) -> Result<PtyToolOutput> {
+                *self.captured.lock().unwrap() = Some(instruction.to_string());
+                Ok(PtyToolOutput {
+                    content: "ok".into(),
+                    exit_code: Some(0),
+                    session_id: None,
+                })
+            }
+        }
+
+        let tool = Arc::new(CaptureTool {
+            captured: Mutex::new(None),
+        });
+
+        let agent = CodingAgent::with_default_config().with_pty_tool(tool.clone());
+
+        let mut task = Task::new("fix bug");
+        task.context = Some("line 42 fails".into());
+        agent.process_task(&task).await.unwrap();
+
+        let captured = tool.captured.lock().unwrap().clone().unwrap();
+        assert!(captured.contains("fix bug"));
+        assert!(captured.contains("Context:"));
+        assert!(captured.contains("line 42 fails"));
     }
 }

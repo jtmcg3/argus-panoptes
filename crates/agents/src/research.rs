@@ -10,6 +10,7 @@
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
+use panoptes_llm::{ChatMessage, LlmClient, LlmRequest, Role};
 use panoptes_memory::{Memory, MemoryConfig, MemoryRetriever, MemoryStore, MemoryType};
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -90,6 +91,8 @@ pub struct ResearchAgent {
     memory_store: Option<Arc<MemoryStore>>,
     /// Memory retriever for building context
     memory_retriever: Option<Arc<MemoryRetriever>>,
+    /// Optional LLM client for enhanced output
+    llm_client: Option<Arc<dyn LlmClient>>,
 }
 
 impl ResearchAgent {
@@ -108,6 +111,7 @@ impl ResearchAgent {
             http_client,
             memory_store: None,
             memory_retriever: None,
+            llm_client: None,
         }
     }
 
@@ -130,6 +134,40 @@ impl ResearchAgent {
         self.memory_store = Some(store);
         self.memory_retriever = Some(retriever);
         self
+    }
+
+    /// Attach an LLM client for enhanced output.
+    pub fn with_llm(mut self, client: Arc<dyn LlmClient>) -> Self {
+        self.llm_client = Some(client);
+        self
+    }
+
+    /// Enhance template output using the LLM, with graceful degradation.
+    async fn enhance_with_llm(&self, template_output: &str, task: &Task) -> String {
+        if let Some(ref llm) = self.llm_client {
+            let system_prompt = self.system_prompt().to_string();
+            let request = LlmRequest {
+                system_prompt: Some(system_prompt),
+                messages: vec![ChatMessage {
+                    role: Role::User,
+                    content: format!(
+                        "Task: {}\n\nBased on these search results, synthesize a comprehensive summary:\n{}",
+                        task.description, template_output
+                    ),
+                }],
+                temperature: Some(0.7),
+                max_tokens: Some(4096),
+            };
+
+            match llm.complete(request).await {
+                Ok(response) if !response.content.is_empty() => return response.content,
+                Ok(_) => warn!(agent = %self.id(), "LLM returned empty response, using template"),
+                Err(e) => {
+                    warn!(agent = %self.id(), error = %e, "LLM failed, falling back to template")
+                }
+            }
+        }
+        template_output.to_string()
     }
 
     /// Initialize memory from config (alternative to with_memory).
@@ -514,6 +552,9 @@ impl ResearchAgent {
         // Step 4: Synthesize findings
         let summary =
             self.synthesize_findings(query, &memory_context, &search_results, &fetched_content);
+
+        // Step 4b: Enhance with LLM if available
+        let summary = self.enhance_with_llm(&summary, task).await;
 
         // Step 5: Store key findings in memory
         // Store each search result snippet as a semantic memory

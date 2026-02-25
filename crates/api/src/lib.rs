@@ -16,6 +16,8 @@
 //! - `POST /api/v1/research` - Execute research/search tasks
 //! - `POST /api/v1/writing` - Execute content creation tasks
 //! - `POST /api/v1/planning` - Execute planning tasks
+//! - `POST /api/v1/review` - Execute code review tasks
+//! - `POST /api/v1/testing` - Execute testing tasks
 //! - `POST /api/v1/workflow` - Execute multi-agent workflows
 //!
 //! # Security Features
@@ -89,6 +91,8 @@ pub fn create_router(state: Arc<AppState>, allowed_origins: Option<Vec<String>>)
         .route("/api/v1/research", post(routes::research_handler))
         .route("/api/v1/writing", post(routes::writing_handler))
         .route("/api/v1/planning", post(routes::planning_handler))
+        .route("/api/v1/review", post(routes::review_handler))
+        .route("/api/v1/testing", post(routes::testing_handler))
         .route("/api/v1/workflow", post(routes::workflow_handler));
 
     // SEC-011: Conditionally add auth middleware if API key is configured

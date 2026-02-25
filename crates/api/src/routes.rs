@@ -293,15 +293,42 @@ pub async fn send_message(
         )
     })?;
 
-    // For now, return the triage decision without executing
-    // Full execution would require the coordinator to not be borrowed
+    // After getting the triage decision, execute it
     let route_str = format!("{:?}", decision.route);
+    let confidence = decision.confidence;
+
+    // Execute the route decision
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        coordinator.execute(decision),
+    )
+    .await
+    .map_err(|_| {
+        error!(ip = %client_ip, "Execution timed out");
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        error!(error = %e, "Execution failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Execution failed: {}", e),
+                code: "EXECUTION_ERROR",
+            }),
+        )
+    })?;
 
     Ok(Json(MessageResponse {
         id: message.id,
-        content: decision.reasoning,
+        content: result.content,
         route: route_str,
-        confidence: decision.confidence,
+        confidence,
     }))
 }
 
@@ -410,7 +437,7 @@ pub async fn websocket_handler(
 
     info!(ip = %client_ip, "WebSocket connection accepted");
 
-    ws.on_upgrade(move |socket| handle_websocket(socket, guard, client_ip))
+    ws.on_upgrade(move |socket| handle_websocket(socket, state, guard, client_ip))
 }
 
 /// Handle WebSocket connection with rate limiting.
@@ -418,6 +445,7 @@ pub async fn websocket_handler(
 /// SEC-006: Message size limited and connection tracked.
 async fn handle_websocket(
     mut socket: axum::extract::ws::WebSocket,
+    state: Arc<AppState>,
     _guard: WebSocketGuard, // RAII guard - releases on drop
     client_ip: std::net::IpAddr,
 ) {
@@ -464,15 +492,19 @@ async fn handle_websocket(
                     break;
                 }
 
-                debug!(
-                    ip = %client_ip,
-                    message_count,
-                    "Received WebSocket message"
-                );
+                debug!(ip = %client_ip, message_count, "Received WebSocket message");
 
-                // Echo back for now
+                // Route through coordinator instead of echoing
+                let message = AgentMessage::user(&*text);
+                let coordinator = state.coordinator.read().await;
+                let response_text = match coordinator.process(message).await {
+                    Ok(response) => response.content,
+                    Err(e) => format!("Error: {}", e),
+                };
+                drop(coordinator); // Release lock before sending
+
                 if socket
-                    .send(Message::Text(format!("Echo: {}", text).into()))
+                    .send(Message::Text(response_text.into()))
                     .await
                     .is_err()
                 {
@@ -816,6 +848,164 @@ pub async fn planning_handler(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
                     error: "Planning agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: None,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle review agent requests.
+///
+/// POST /api/v1/review
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn review_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for review request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received review request"
+    );
+
+    let agent = match state.agents.review.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Review agent not available".into(),
+                    code: "AGENT_UNAVAILABLE",
+                }),
+            ));
+        }
+    };
+
+    let mut task = Task::new(&request.instruction);
+    if let Some(ref ctx) = request.context {
+        task = task.with_context(ctx);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_REQUEST_TIMEOUT_SECS),
+        agent.process_task(&task),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(ErrorResponse {
+                error: "Request timed out".into(),
+                code: "TIMEOUT",
+            }),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Agent failed: {}", e),
+                code: "AGENT_ERROR",
+            }),
+        )
+    })?;
+
+    Ok(Json(AgentResponse {
+        id: task.id,
+        status: "completed".into(),
+        output: result.content,
+        session_id: None,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }))
+}
+
+/// Handle testing agent requests.
+///
+/// POST /api/v1/testing
+///
+/// SEC-006: Rate limited and size-bounded.
+pub async fn testing_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<AgentRequest>,
+) -> Result<Json<AgentResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let client_ip = addr.ip();
+    let start_time = std::time::Instant::now();
+
+    if !state.rate_limiter.check_request(client_ip) {
+        warn!(ip = %client_ip, "Rate limit exceeded for testing request");
+        return Err(rate_limited_response());
+    }
+
+    if request.instruction.len() > MAX_AGENT_REQUEST_SIZE {
+        return Err(payload_too_large_response(MAX_AGENT_REQUEST_SIZE));
+    }
+
+    info!(
+        ip = %client_ip,
+        instruction_preview = %request.instruction.chars().take(50).collect::<String>(),
+        "Received testing request"
+    );
+
+    let agent = match state.agents.testing.as_ref() {
+        Some(agent) => agent,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Testing agent not available".into(),
                     code: "AGENT_UNAVAILABLE",
                 }),
             ));

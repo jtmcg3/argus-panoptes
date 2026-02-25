@@ -37,6 +37,8 @@
 pub mod coding;
 pub mod command;
 pub mod planning;
+pub mod pty_tool;
+pub mod pty_tools;
 pub mod research;
 pub mod review;
 pub mod testing;
@@ -46,6 +48,8 @@ pub mod writing;
 
 pub use coding::{CodingAgent, ConfirmationPolicy};
 pub use planning::PlanningAgent;
+pub use pty_tool::{PtyTool, PtyToolOutput};
+pub use pty_tools::{ClaudeCodeTool, CliToolConfig, GenericCliTool};
 pub use research::{ResearchAgent, ResearchConfig, SearchResult, WebContent};
 pub use review::ReviewAgent;
 pub use testing::TestingAgent;

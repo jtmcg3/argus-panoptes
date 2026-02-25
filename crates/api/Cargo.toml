@@ -11,6 +11,7 @@ panoptes-common = { workspace = true }
 panoptes-coordinator = { workspace = true }
 panoptes-agents = { workspace = true }
 panoptes-memory = { workspace = true }
+panoptes-llm = { workspace = true }
 
 # Web framework
 axum = { version = "0.8", features = ["macros", "ws"] }
@@ -34,6 +35,14 @@ anyhow = { workspace = true }
 
 # Security
 parking_lot = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+axum = { version = "0.8", features = ["macros"] }
+serde_json = { workspace = true }
+http-body-util = "0.1"
+reqwest = { workspace = true }
 
 [[bin]]
 name = "panoptes-api"

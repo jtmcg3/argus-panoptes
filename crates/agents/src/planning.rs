@@ -9,6 +9,7 @@
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
+use panoptes_llm::{ChatMessage, LlmClient, LlmRequest, Role};
 use panoptes_memory::{Memory, MemoryStore, MemoryType};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,6 +83,8 @@ pub struct PlanningAgent {
     planning_config: PlanningConfig,
     busy: AtomicBool,
     memory_store: Option<Arc<MemoryStore>>,
+    /// Optional LLM client for enhanced output
+    llm_client: Option<Arc<dyn LlmClient>>,
 }
 
 impl PlanningAgent {
@@ -91,6 +94,7 @@ impl PlanningAgent {
             planning_config: PlanningConfig::default(),
             busy: AtomicBool::new(false),
             memory_store: None,
+            llm_client: None,
         }
     }
 
@@ -106,6 +110,40 @@ impl PlanningAgent {
     pub fn with_memory(mut self, store: Arc<MemoryStore>) -> Self {
         self.memory_store = Some(store);
         self
+    }
+
+    /// Attach an LLM client for enhanced output.
+    pub fn with_llm(mut self, client: Arc<dyn LlmClient>) -> Self {
+        self.llm_client = Some(client);
+        self
+    }
+
+    /// Enhance template output using the LLM, with graceful degradation.
+    async fn enhance_with_llm(&self, template_output: &str, task: &Task) -> String {
+        if let Some(ref llm) = self.llm_client {
+            let system_prompt = self.system_prompt().to_string();
+            let request = LlmRequest {
+                system_prompt: Some(system_prompt),
+                messages: vec![ChatMessage {
+                    role: Role::User,
+                    content: format!(
+                        "Task: {}\n\nGiven this task breakdown, create an optimized plan with better prioritization:\n{}",
+                        task.description, template_output
+                    ),
+                }],
+                temperature: Some(0.7),
+                max_tokens: Some(4096),
+            };
+
+            match llm.complete(request).await {
+                Ok(response) if !response.content.is_empty() => return response.content,
+                Ok(_) => warn!(agent = %self.id(), "LLM returned empty response, using template"),
+                Err(e) => {
+                    warn!(agent = %self.id(), error = %e, "LLM failed, falling back to template")
+                }
+            }
+        }
+        template_output.to_string()
     }
 
     /// Parse a description into individual plan items.
@@ -318,6 +356,9 @@ impl PlanningAgent {
         if !existing_context.is_empty() {
             plan = format!("{}\n{}", existing_context, plan);
         }
+
+        // Enhance with LLM if available
+        plan = self.enhance_with_llm(&plan, task).await;
 
         self.store_plan(&plan).await;
 

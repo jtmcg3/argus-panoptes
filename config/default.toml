@@ -1,0 +1,28 @@
+# Argus-Panoptes Default Configuration
+
+[provider]
+provider_type = "openai"
+model = "lfm2-24b-a2b"
+api_url = "http://host.orb.internal:11434"
+timeout_ms = 30000
+
+[llm]
+provider = "openai"
+model = "lfm2-24b-a2b"
+api_url = "http://host.orb.internal:11434"
+max_concurrent_requests = 2
+# api_key = "" # not needed for Ollama
+
+[llm.retry]
+max_retries = 3
+initial_delay_ms = 500
+max_delay_ms = 30000
+backoff_multiplier = 2.0
+
+[memory]
+db_path = "./data/memory"
+embedding_model = "all-MiniLM-L6-v2"
+max_context_tokens = 4096
+
+[memory.working]
+size = 20

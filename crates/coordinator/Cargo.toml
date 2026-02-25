@@ -34,3 +34,7 @@ toml = { workspace = true }
 
 # MCP client (for calling agent tools)
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+panoptes-agents = { workspace = true }

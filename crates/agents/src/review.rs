@@ -10,9 +10,10 @@ use crate::command::{CommandOutput, CommandRunner, SystemCommandRunner};
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
+use panoptes_llm::{ChatMessage, LlmClient, LlmRequest, Role};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::info;
+use tracing::{info, warn};
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are a senior code reviewer. Your role is to:
 
@@ -103,6 +104,8 @@ pub struct ReviewAgent {
     review_config: ReviewConfig,
     busy: AtomicBool,
     command_runner: Arc<dyn CommandRunner>,
+    /// Optional LLM client for enhanced output
+    llm_client: Option<Arc<dyn LlmClient>>,
 }
 
 impl ReviewAgent {
@@ -112,6 +115,7 @@ impl ReviewAgent {
             review_config: ReviewConfig::default(),
             busy: AtomicBool::new(false),
             command_runner: Arc::new(SystemCommandRunner),
+            llm_client: None,
         }
     }
 
@@ -128,6 +132,40 @@ impl ReviewAgent {
     pub fn with_command_runner(mut self, runner: Arc<dyn CommandRunner>) -> Self {
         self.command_runner = runner;
         self
+    }
+
+    /// Attach an LLM client for enhanced output.
+    pub fn with_llm(mut self, client: Arc<dyn LlmClient>) -> Self {
+        self.llm_client = Some(client);
+        self
+    }
+
+    /// Enhance template output using the LLM, with graceful degradation.
+    async fn enhance_with_llm(&self, template_output: &str, task: &Task) -> String {
+        if let Some(ref llm) = self.llm_client {
+            let system_prompt = self.system_prompt().to_string();
+            let request = LlmRequest {
+                system_prompt: Some(system_prompt),
+                messages: vec![ChatMessage {
+                    role: Role::User,
+                    content: format!(
+                        "Task: {}\n\nAnalyze these code review findings and provide actionable recommendations:\n{}",
+                        task.description, template_output
+                    ),
+                }],
+                temperature: Some(0.7),
+                max_tokens: Some(4096),
+            };
+
+            match llm.complete(request).await {
+                Ok(response) if !response.content.is_empty() => return response.content,
+                Ok(_) => warn!(agent = %self.id(), "LLM returned empty response, using template"),
+                Err(e) => {
+                    warn!(agent = %self.id(), error = %e, "LLM failed, falling back to template")
+                }
+            }
+        }
+        template_output.to_string()
     }
 
     /// Parse cargo clippy output into review findings.
@@ -396,6 +434,9 @@ impl ReviewAgent {
         }
 
         let report = Self::build_review_report(&findings, target);
+
+        // Enhance with LLM if available
+        let report = self.enhance_with_llm(&report, task).await;
 
         info!(
             agent = %self.id(),

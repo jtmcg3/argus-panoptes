@@ -9,6 +9,7 @@ description = "Specialist agents for research, writing, planning, and coding"
 [dependencies]
 panoptes-common = { workspace = true }
 panoptes-memory = { workspace = true }
+panoptes-llm = { workspace = true }
 panoptes-coordinator = { workspace = true }
 
 # MCP client (for calling tools)

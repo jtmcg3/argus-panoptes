@@ -6,6 +6,7 @@ members = [
     "crates/memory",
     "crates/common",
     "crates/api",
+    "crates/llm",
 ]
 resolver = "2"
 
@@ -24,6 +25,7 @@ panoptes-agents = { path = "crates/agents" }
 panoptes-memory = { path = "crates/memory" }
 panoptes-common = { path = "crates/common" }
 panoptes-api = { path = "crates/api" }
+panoptes-llm = { path = "crates/llm" }
 
 # External: ZeroClaw
 # Default: Use git repo for CI/portable builds
