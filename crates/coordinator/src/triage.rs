@@ -13,11 +13,12 @@ use tracing::{debug, error, info, warn};
 /// The main coordinator that orchestrates all agents.
 ///
 /// Uses ZeroClaw for intelligent triage and routing decisions when configured
-/// with an OpenAI provider. Falls back to keyword-based routing otherwise.
+/// with a supported provider (OpenAI or Ollama). Falls back to keyword-based
+/// routing otherwise.
 pub struct Coordinator {
     config: CoordinatorConfig,
 
-    /// ZeroClaw triage agent (if OpenAI is configured)
+    /// ZeroClaw triage agent (if a supported provider is configured)
     triage_agent: Option<RwLock<ZeroClawTriageAgent>>,
 
     // Active tasks being coordinated
@@ -40,19 +41,20 @@ pub struct Coordinator {
 impl Coordinator {
     /// Create a new coordinator with the given configuration.
     ///
-    /// If the provider is configured as "openai" and an API key is available,
-    /// ZeroClaw will be used for intelligent LLM-based triage. Otherwise,
-    /// keyword-based fallback routing is used.
+    /// If the provider is configured as "openai" or "ollama", ZeroClaw will
+    /// be used for intelligent LLM-based triage. Otherwise, keyword-based
+    /// fallback routing is used.
     pub fn new(config: CoordinatorConfig) -> Result<Self> {
         info!("Initializing Panoptes coordinator");
 
-        // Try to create ZeroClaw triage agent if OpenAI is configured
-        let triage_agent = if config.provider.provider_type == "openai" {
-            match ZeroClawTriageAgent::new(&config.provider) {
+        // Try to create ZeroClaw triage agent for supported providers
+        let triage_agent = match config.provider.provider_type.as_str() {
+            "openai" | "ollama" => match ZeroClawTriageAgent::new(&config.provider) {
                 Ok(agent) => {
                     info!(
                         model = %config.provider.model,
-                        "ZeroClaw triage agent initialized with OpenAI"
+                        provider = %config.provider.provider_type,
+                        "ZeroClaw triage agent initialized"
                     );
                     Some(RwLock::new(agent))
                 }
@@ -63,13 +65,14 @@ impl Coordinator {
                     );
                     None
                 }
+            },
+            _ => {
+                info!(
+                    provider = %config.provider.provider_type,
+                    "Unsupported triage provider, using keyword fallback"
+                );
+                None
             }
-        } else {
-            info!(
-                provider = %config.provider.provider_type,
-                "Non-OpenAI provider configured, using keyword triage"
-            );
-            None
         };
 
         Ok(Self {
@@ -151,7 +154,7 @@ impl Coordinator {
 
     /// Analyze a user message and decide which agent(s) should handle it.
     ///
-    /// Uses ZeroClaw LLM-based routing if OpenAI is configured,
+    /// Uses ZeroClaw LLM-based routing if a supported provider is configured,
     /// otherwise falls back to keyword-based routing.
     pub async fn triage(&self, message: &AgentMessage) -> Result<RouteDecision> {
         info!(
