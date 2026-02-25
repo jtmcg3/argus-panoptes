@@ -18,9 +18,11 @@ pub struct CoordinatorConfig {
     pub provider: ProviderConfig,
 
     /// Registered agents and their MCP endpoints
+    #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
 
     /// Memory/LanceDB configuration
+    #[serde(default)]
     pub memory: MemoryConfig,
 
     /// Default working directory
@@ -93,6 +95,7 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
     /// Path to LanceDB database
+    #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
 
     /// Embedding model to use
@@ -102,6 +105,20 @@ pub struct MemoryConfig {
     /// Maximum context tokens to include from memory
     #[serde(default = "default_max_context")]
     pub max_context_tokens: usize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            db_path: default_db_path(),
+            embedding_model: default_embedding_model(),
+            max_context_tokens: default_max_context(),
+        }
+    }
+}
+
+fn default_db_path() -> PathBuf {
+    PathBuf::from("./data/memory")
 }
 
 fn default_embedding_model() -> String {
@@ -123,11 +140,7 @@ impl Default for CoordinatorConfig {
                 timeout_ms: default_timeout(),
             },
             agents: HashMap::new(),
-            memory: MemoryConfig {
-                db_path: PathBuf::from("./data/memory"),
-                embedding_model: default_embedding_model(),
-                max_context_tokens: default_max_context(),
-            },
+            memory: MemoryConfig::default(),
             default_working_dir: None,
             allowed_base_dirs: Vec::new(),
         }
