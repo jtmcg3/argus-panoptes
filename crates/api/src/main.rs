@@ -15,6 +15,7 @@
 
 use panoptes_api::{ApiKeyConfig, AppState, default_memory_config, serve};
 use panoptes_coordinator::CoordinatorConfig;
+use panoptes_llm::LlmConfig;
 use panoptes_memory::MemoryConfig;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let mut enable_memory = false;
     let mut memory_path: Option<PathBuf> = None;
     let mut bind_addr: Option<String> = None;
+    let mut no_llm = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -71,6 +73,9 @@ async fn main() -> anyhow::Result<()> {
                     i += 1;
                 }
             }
+            "--no-llm" => {
+                no_llm = true;
+            }
             "--help" | "-h" => {
                 println!("Panoptes API Server");
                 println!();
@@ -85,6 +90,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("  -m, --memory             Enable memory persistence for research");
                 println!(
                     "      --memory-path <DIR>  Path to LanceDB database (default: ./data/memory)"
+                );
+                println!(
+                    "      --no-llm             Disable LLM even if [llm] section is in config"
                 );
                 println!("  -h, --help               Show this help message");
                 println!();
@@ -131,34 +139,105 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .map(|s| s.split(',').map(|o| o.trim().to_string()).collect());
 
-    // Load coordinator configuration
-    let config = if let Some(path) = config_path {
+    // Load coordinator configuration and optional LLM config
+    let resolved_config_path = config_path.or_else(|| {
+        let default = "config/default.toml";
+        if std::path::Path::new(default).exists() {
+            tracing::info!(path = default, "Found default config file");
+            Some(default.to_string())
+        } else {
+            None
+        }
+    });
+
+    let (config, llm_config) = if let Some(ref path) = resolved_config_path {
         tracing::info!(path = %path, "Loading configuration");
-        CoordinatorConfig::from_file(&path)?
+        let coordinator = CoordinatorConfig::from_file(path)?;
+
+        // Parse [llm] section from the same file
+        let llm = if no_llm {
+            tracing::info!("LLM disabled via --no-llm flag");
+            None
+        } else {
+            let raw = std::fs::read_to_string(path)?;
+            let table: toml::Table = toml::from_str(&raw)?;
+            if let Some(llm_value) = table.get("llm") {
+                match llm_value.clone().try_into::<LlmConfig>() {
+                    Ok(llm_cfg) => {
+                        tracing::info!(
+                            provider = %llm_cfg.provider,
+                            model = %llm_cfg.model,
+                            "LLM configuration loaded"
+                        );
+                        Some(llm_cfg)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to parse [llm] config, continuing without LLM");
+                        None
+                    }
+                }
+            } else {
+                tracing::info!("No [llm] section in config, running in template-only mode");
+                None
+            }
+        };
+
+        (coordinator, llm)
     } else {
-        tracing::info!("Using default configuration");
-        CoordinatorConfig::default()
+        tracing::info!("Using default configuration (no config file)");
+        (CoordinatorConfig::default(), None)
     };
 
-    // Create application state
-    let mut state = if enable_memory {
-        let memory_config = if let Some(path) = memory_path {
+    // Build memory config: --memory-path flag > config file [memory] section > default
+    let memory_config = if enable_memory {
+        let mem_cfg = if let Some(path) = memory_path {
             MemoryConfig {
                 db_path: path,
+                ..Default::default()
+            }
+        } else if resolved_config_path.is_some() {
+            // Map coordinator's [memory] fields to panoptes_memory::MemoryConfig
+            MemoryConfig {
+                db_path: config.memory.db_path.clone(),
+                embedding_model: config.memory.embedding_model.clone(),
                 ..Default::default()
             }
         } else {
             default_memory_config()
         };
+        Some(mem_cfg)
+    } else if llm_config.is_some() && resolved_config_path.is_some() {
+        // When LLM is enabled via config, also enable memory from config
+        tracing::info!("Enabling memory (implied by LLM config)");
+        Some(MemoryConfig {
+            db_path: config.memory.db_path.clone(),
+            embedding_model: config.memory.embedding_model.clone(),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
 
+    // Create application state
+    let mut state = if let Some(llm_cfg) = llm_config {
+        if let Some(mem_cfg) = memory_config {
+            tracing::info!(
+                db_path = %mem_cfg.db_path.display(),
+                "Initializing with LLM + memory"
+            );
+            AppState::with_llm(config, llm_cfg, Some(mem_cfg)).await?
+        } else {
+            tracing::info!("Initializing with LLM (no memory)");
+            AppState::with_llm(config, llm_cfg, None).await?
+        }
+    } else if let Some(mem_cfg) = memory_config {
         tracing::info!(
-            db_path = %memory_config.db_path.display(),
+            db_path = %mem_cfg.db_path.display(),
             "Initializing with memory enabled"
         );
-
-        AppState::with_memory(config, memory_config).await?
+        AppState::with_memory(config, mem_cfg).await?
     } else {
-        tracing::info!("Starting without memory persistence");
+        tracing::info!("Starting in template-only mode (no LLM, no memory)");
         AppState::new(config)?
     };
 
