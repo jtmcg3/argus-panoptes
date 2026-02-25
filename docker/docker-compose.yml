@@ -8,7 +8,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: panoptes-api
-    command: ["panoptes-api", "--port", "8080", "--config", "/app/config/config.toml"]
+    command: ["panoptes-api", "--port", "8080", "--config", "/app/config/default.toml"]
     environment:
       - RUST_LOG=info,panoptes=debug,tower_http=debug
       - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}

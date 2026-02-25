@@ -110,8 +110,8 @@ curl -fsSL https://ollama.com/install.sh | sh
 sudo systemctl enable ollama
 sudo systemctl start ollama
 
-# Pull triage model (example: Phi-3)
-ollama pull phi3:mini
+# Pull the default model
+ollama pull lfm2:24b
 
 # Install build dependencies
 sudo apt update
@@ -121,7 +121,19 @@ sudo apt install -y build-essential pkg-config libssl-dev
 git clone https://github.com/jtmcg3/argus-panoptes.git
 cd argus-panoptes
 cargo build --release
+
+# Configure
+cp config/config.example.toml config/config.toml
+# If adding API keys, restrict permissions:
+chmod 600 config/config.toml
+
+# Run the API server
+./target/release/panoptes-api --config config/config.toml --memory
 ```
+
+> **Ollama from VM**: When running Ollama on the Mac host and the server inside an
+> OrbStack VM, use `host.orb.internal:11434` as the Ollama URL in your config
+> (instead of `localhost:11434`).
 
 ### Pros
 
@@ -365,7 +377,7 @@ networks:
 
 ```dockerfile
 # docker/Dockerfile.coordinator
-FROM rust:1.75 AS builder
+FROM rust:1.85 AS builder
 
 WORKDIR /app
 
@@ -374,7 +386,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
 # Build release binary
-RUN cargo build --release -p panoptes-coordinator
+RUN cargo build --release -p panoptes-api
 
 # Runtime image
 FROM debian:bookworm-slim
@@ -387,20 +399,20 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user
 RUN useradd -r -s /bin/false appuser
 
-COPY --from=builder /app/target/release/panoptes-coordinator /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-api /usr/local/bin/
 
 USER appuser
 
 EXPOSE 8080
 
-CMD ["panoptes-coordinator"]
+CMD ["panoptes-api", "--config", "/app/config/config.toml", "--memory"]
 ```
 
 **PTY-MCP Server:**
 
 ```dockerfile
 # docker/Dockerfile.pty-mcp
-FROM rust:1.75 AS builder
+FROM rust:1.85 AS builder
 
 WORKDIR /app
 
@@ -449,7 +461,7 @@ docker compose build
 docker compose up -d
 
 # Pull Ollama models
-docker exec argus-ollama ollama pull phi3:mini
+docker exec argus-ollama ollama pull lfm2:24b
 
 # View logs
 docker compose logs -f coordinator
@@ -568,7 +580,7 @@ mkdir -p docker
 docker compose up -d
 
 # 7. Pull Ollama model
-docker exec argus-ollama ollama pull phi3:mini
+docker exec argus-ollama ollama pull lfm2:24b
 
 # 8. Verify
 curl http://localhost:8080/health
@@ -596,7 +608,7 @@ source ~/.cargo/env
 # 5. Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 sudo systemctl enable --now ollama
-ollama pull phi3:mini
+ollama pull lfm2:24b
 
 # 6. Clone and build
 git clone https://github.com/jtmcg3/argus-panoptes.git
@@ -622,7 +634,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/argus-panoptes
 Environment=RUST_LOG=info
 Environment=OLLAMA_HOST=http://localhost:11434
-ExecStart=/home/ubuntu/argus-panoptes/target/release/panoptes-coordinator
+ExecStart=/home/ubuntu/argus-panoptes/target/release/panoptes-api --config /home/ubuntu/argus-panoptes/config/config.toml --memory
 Restart=on-failure
 RestartSec=5
 
@@ -683,4 +695,5 @@ ls ~/OrbStack/machines/argus-vm/
 
 ## Changelog
 
+- **2026-02-24**: Updated binary name to panoptes-api, added config/security notes, Ollama host.orb.internal note
 - **2026-02-21**: Initial document created

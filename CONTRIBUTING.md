@@ -5,6 +5,7 @@
 - **Rust** (stable, edition 2024) — install via [rustup](https://rustup.rs/)
 - **pkg-config** and **libssl-dev** (Linux) or equivalent OpenSSL headers
 - **protobuf-compiler** (`protoc`)
+- **Ollama** (optional) — for local LLM testing without an API key. Install from [ollama.com](https://ollama.com/), then `ollama pull lfm2:24b`
 
 ## Build Commands
 
@@ -41,8 +42,9 @@ crates/
 ├── coordinator/   # ZeroClaw triage + routing
 ├── agents/        # Specialist agents (coding, research, writing, etc.)
 ├── memory/        # LanceDB vector memory
+├── llm/           # LLM client abstraction (OpenAI/Ollama, Anthropic)
 ├── pty-mcp/       # PTY session management via MCP
-└── api/           # HTTP API gateway
+└── api/           # HTTP API gateway (binary: panoptes-api)
 ```
 
 ## Adding a New Agent

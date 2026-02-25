@@ -1,31 +1,34 @@
 # CLAUDE.md
 
-It is the year of our Lord 2026. 
+It is the year of our Lord 2026.
 2024 is a stable edition of Rust.
-DO NOT REVERT to the 2021 edition. 
+DO NOT REVERT to the 2021 edition.
 Please update your knowledge before using new packages.
 This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
 Argus-Panoptes is a Rust multi-agent orchestration system that combines:
-- **ZeroClaw** for intelligent triage and routing
+- **ZeroClaw** for intelligent triage and routing (with keyword fallback when no API key)
 - **swarms-rs** for specialist agent coordination
-- **LanceDB** for dual-layer memory (working + persistent)
+- **LanceDB** for dual-layer memory (working + persistent) with fastembed embeddings
 - **MCP** (Model Context Protocol) for tool integration
+- **LLM abstraction** supporting Anthropic and OpenAI/Ollama providers
 
-The system coordinates multiple AI agents to handle complex tasks across coding, research, writing, planning, and more.
+The system coordinates multiple AI agents to handle tasks across coding, research, writing, planning, code review, and testing.
 
 ## Build Commands
 
 ```bash
-cargo build              # Build all crates
+cargo build                          # Build all crates
 cargo build -p panoptes-coordinator  # Build specific crate
+cargo build --release                # Optimized build (LTO, stripped)
+cargo run --bin panoptes-api         # Run API server
 cargo run --bin pty-mcp-server       # Run PTY-MCP server
-cargo test               # Run all tests
+cargo test                           # Run all tests (258 passing)
 cargo test -p panoptes-memory        # Test specific crate
-cargo clippy             # Run linter
-cargo fmt                # Format code
+cargo clippy                         # Run linter (clean)
+cargo fmt                            # Format code
 ```
 
 ## Architecture
@@ -33,14 +36,23 @@ cargo fmt                # Format code
 ```
 argus-panoptes/
 ├── crates/
-│   ├── coordinator/     # ZeroClaw-based triage (lib + future bin)
+│   ├── api/             # REST/WebSocket API gateway (binary: panoptes-api)
+│   ├── coordinator/     # ZeroClaw triage + workflow orchestration
+│   ├── agents/          # swarms-rs specialist agents (6 types)
+│   ├── llm/             # LLM client abstraction (Anthropic, OpenAI/Ollama)
+│   ├── memory/          # LanceDB dual-layer memory + fastembed
 │   ├── pty-mcp/         # MCP server for PTY sessions
-│   ├── agents/          # swarms-rs specialist agents
-│   ├── memory/          # LanceDB integration
-│   └── common/          # Shared types
-├── docker/              # Container deployment
-└── config/              # Configuration files
+│   └── common/          # Shared types and error handling
+├── config/              # Configuration (default.toml)
+└── docker/              # Container deployment
 ```
+
+## Config
+
+`config/default.toml` is auto-detected by the API server. Sections:
+- `[provider]` -- ZeroClaw triage provider settings
+- `[llm]` -- LLM client config (provider, model, api_url, retry, concurrency)
+- `[memory]` -- LanceDB path, embedding model, token limits
 
 ## Key Patterns
 
@@ -54,6 +66,17 @@ pub trait Agent: Send + Sync {
     async fn process_task(&self, task: &Task) -> Result<AgentMessage>;
 }
 ```
+
+### LLM Client Trait
+LLM providers implement `panoptes_llm::LlmClient`:
+```rust
+#[async_trait]
+pub trait LlmClient: Send + Sync {
+    async fn complete(&self, request: LlmRequest) -> Result<LlmResponse>;
+    fn model_name(&self) -> &str;
+}
+```
+Implementations: `OpenAiClient` (also used for Ollama), `AnthropicClient`. Wrapped in `RetryingClient` and `SemaphoredClient` for production use.
 
 ### Routing Decision
 The coordinator routes requests via `AgentRoute`:
@@ -81,24 +104,19 @@ pub enum MemoryType {
 
 ## Development Guidelines
 
-1. **Agents are stateless** — All state lives in memory crate or external services
-2. **MCP for tool calls** — Agents communicate via MCP, not direct function calls
-3. **Async-first** — Use tokio async throughout
-4. **Trait-based** — Follow ZeroClaw's pattern of trait-defined subsystems
+1. **Agents are stateless** -- All state lives in memory crate or external services
+2. **MCP for tool calls** -- Agents communicate via MCP, not direct function calls
+3. **Async-first** -- Use tokio async throughout
+4. **Trait-based** -- Follow ZeroClaw's pattern of trait-defined subsystems
+5. **LLM with fallback** -- Agents use LLM for content generation; template fallback when unconfigured
 
 ## Dependencies
 
 Key external dependencies:
-- `zeroclaw` — Local fork at `../zeroclaw`
-- `swarms-rs` — Multi-agent orchestration
-- `rmcp` — Rust MCP SDK
-- `lancedb` — Vector database
-- `portable-pty` — PTY management (from argus)
-
-## TODOs
-
-Current scaffold has placeholders marked with `// TODO:`. Key integration points:
-1. ZeroClaw triage integration in `coordinator/src/triage.rs`
-2. MCP ServerHandler impl in `pty-mcp/src/server.rs`
-3. LanceDB connection in `memory/src/store.rs`
-4. swarms-rs workflow integration in `agents/`
+- `zeroclaw` -- From git (https://github.com/zeroclaw-labs/zeroclaw.git, main branch)
+- `swarms-rs` -- Multi-agent orchestration
+- `rmcp` -- Rust MCP SDK
+- `lancedb` -- Vector database
+- `fastembed` -- Local embedding model
+- `portable-pty` -- PTY management
+- `reqwest` / `scraper` -- HTTP + HTML parsing for research agent

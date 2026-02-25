@@ -31,16 +31,16 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -u 1000 panoptes
-USER panoptes
+# Create non-root user and data directories
+RUN useradd -m -u 1000 panoptes \
+    && mkdir -p /app/data/memory /app/config \
+    && chown -R panoptes:panoptes /app
 
 # Copy binaries from builder
 COPY --from=builder /app/target/release/pty-mcp-server /usr/local/bin/
 COPY --from=builder /app/target/release/panoptes-api /usr/local/bin/
 
-# Create data directories
-RUN mkdir -p /app/data/memory /app/config
+USER panoptes
 
 # Environment defaults
 ENV RUST_LOG=info,panoptes=debug

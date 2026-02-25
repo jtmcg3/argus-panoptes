@@ -1,293 +1,169 @@
 # Argus-Panoptes
 
-> The hundred-eyed guardian — A multi-agent orchestration system built on ZeroClaw and swarms-rs.
+> The hundred-eyed guardian -- A multi-agent orchestration system built on ZeroClaw and swarms-rs.
 
-Argus-Panoptes is a Rust-native AI agent swarm platform that coordinates specialized agents for coding, research, writing, planning, and more. It uses ZeroClaw for intelligent triage and routing, swarms-rs for agent orchestration, and LanceDB for long-term memory.
+Argus-Panoptes is a Rust-native AI agent swarm that coordinates specialist agents for coding, research, writing, planning, code review, and testing. It uses ZeroClaw for triage/routing, swarms-rs for orchestration, LanceDB for vector memory, and an LLM abstraction layer supporting Ollama and OpenAI-compatible providers.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         ARGUS-PANOPTES                                  │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  User Request                                                           │
-│       │                                                                 │
-│       ▼                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                  ZEROCLAW COORDINATOR                           │   │
-│  │  - Triage & intent classification                               │   │
-│  │  - Agent routing decisions                                       │   │
-│  │  - Workflow orchestration                                        │   │
-│  │  - Multi-turn memory context                                     │   │
-│  └───────────────────────────┬─────────────────────────────────────┘   │
-│                              │                                          │
-│              MCP (Model Context Protocol)                               │
-│                              │                                          │
-│  ┌───────────┬───────────┬───┴───┬───────────┬───────────┐            │
-│  ▼           ▼           ▼       ▼           ▼           ▼            │
-│ ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐           │
-│ │Code │   │Rsrch│   │Write│   │Plan │   │Revw │   │Test │           │
-│ │Agent│   │Agent│   │Agent│   │Agent│   │Agent│   │Agent│           │
-│ └──┬──┘   └──┬──┘   └──┬──┘   └──┬──┘   └──┬──┘   └──┬──┘           │
-│    │         │         │         │         │         │               │
-│    │         │         │         │         │         │               │
-│    └─────────┴─────────┴────┬────┴─────────┴─────────┘               │
-│                             │                                         │
-│                    ┌────────┴────────┐                                │
-│                    │  SHARED MEMORY  │                                │
-│                    │    (LanceDB)    │                                │
-│                    │                 │                                │
-│                    │  - Episodic     │                                │
-│                    │  - Semantic     │                                │
-│                    │  - Procedural   │                                │
-│                    └─────────────────┘                                │
-│                                                                        │
-└────────────────────────────────────────────────────────────────────────┘
+                          ARGUS-PANOPTES
+
+  User Request
+       |
+       v
+  +-----------+       +-----------+
+  |  API      | ----> | ZeroClaw  |
+  |  Gateway  |       | Triage    |
+  +-----------+       +-----------+
+       |                    |
+       |         MCP (Model Context Protocol)
+       |                    |
+       v                    v
+  +------+------+------+------+------+------+
+  | Code | Rsrch| Write| Plan | Revw | Test |
+  +------+------+------+------+------+------+
+       |              |              |
+       v              v              v
+  +-----------+  +-----------+  +-----------+
+  |  LLM      |  |  Memory   |  |  PTY-MCP  |
+  |  Client   |  |  (LanceDB)|  |  Server   |
+  +-----------+  +-----------+  +-----------+
 ```
 
-## Components
+## Crates
 
 | Crate | Description |
 |-------|-------------|
-| `panoptes-coordinator` | ZeroClaw-based triage and orchestration |
-| `panoptes-pty-mcp` | MCP server exposing PTY for Claude CLI |
-| `panoptes-agents` | swarms-rs specialist agents |
-| `panoptes-memory` | LanceDB-backed dual-layer memory |
-| `panoptes-common` | Shared types and utilities |
+| `panoptes-api` | REST/WebSocket API gateway with auth, rate limiting, CORS |
+| `panoptes-coordinator` | ZeroClaw triage and workflow orchestration |
+| `panoptes-agents` | Specialist agents (coding, research, writing, planning, review, testing) |
+| `panoptes-llm` | LLM client abstraction (Anthropic, OpenAI/Ollama) with retry + semaphore |
+| `panoptes-memory` | LanceDB dual-layer memory with fastembed embeddings |
+| `panoptes-pty-mcp` | MCP server exposing PTY sessions for Claude CLI |
+| `panoptes-common` | Shared types and error handling |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Rust 1.87+
+- Rust 1.87+ (2024 edition)
 - Ollama (for local LLM inference)
 - Docker (optional, for containerized deployment)
 
-### Build
+### Build and Test
 
 ```bash
-# Clone with ZeroClaw fork
 git clone https://github.com/jtmcg3/argus-panoptes
 cd argus-panoptes
-
-# Build all crates
 cargo build
-
-# Run tests
 cargo test
 ```
 
-### Configuration
+### Configure
 
-```bash
-# Copy example config
-cp config/config.example.toml config/config.toml
+The API server auto-detects `config/default.toml`. Key sections:
 
-# Edit with your settings
-vim config/config.toml
+```toml
+[provider]
+provider_type = "openai"        # "openai" works for Ollama too
+model = "lfm2:24b"
+api_url = "http://localhost:11434"
+
+[llm]
+provider = "openai"
+model = "lfm2:24b"
+api_url = "http://localhost:11434"
+max_concurrent_requests = 2
+
+[memory]
+db_path = "./data/memory"
+embedding_model = "all-MiniLM-L6-v2"
 ```
 
 ### Run
 
 ```bash
-# Start Ollama (if not running)
+# Start Ollama
 ollama serve
+ollama pull lfm2:24b    # or any compatible model
 
-# Pull required model
-ollama pull llama3.2
+# Run the API server
+cargo run --bin panoptes-api
 
-# Run the coordinator
-cargo run --bin panoptes-coordinator
-
-# In another terminal, run PTY-MCP server
-cargo run --bin pty-mcp-server
+# Or with options
+cargo run --bin panoptes-api -- --port 8080 --memory
 ```
 
 ### Docker
 
 ```bash
-# Development mode (with hot reload)
+# Development
 docker-compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
 
-# Production mode
+# Production
 docker-compose -f docker/docker-compose.yml up -d
 ```
 
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check (no auth required) |
+| `POST` | `/api/v1/messages` | Coordinator triage + routing |
+| `GET` | `/api/v1/sessions/:id` | PTY session status |
+| `WS` | `/api/v1/ws` | WebSocket streaming |
+| `POST` | `/api/v1/{coding,research,writing,planning,review,testing}` | Direct agent access |
+| `POST` | `/api/v1/workflow` | Multi-agent workflows |
+
 ## Agents
 
-### Coding Agent
-Uses PTY-MCP to run Claude CLI for code generation and modification.
-- Spawns persistent PTY sessions
-- Handles y/N confirmations
-- Streams output in real-time
+- **Coding** -- PTY-MCP sessions with Claude CLI, persistent terminals, y/N handling
+- **Research** -- Web search, query decomposition, source synthesis
+- **Writing** -- Docs, email, reports with tone adaptation
+- **Planning** -- Goal breakdown, dependency tracking, progress monitoring
+- **Review** -- Security scanning, style checking, improvement suggestions
+- **Testing** -- Test suite execution, case generation, coverage analysis
 
-### Research Agent
-Web search and knowledge gathering.
-- Query decomposition
-- Source synthesis
-- Citation tracking
+All agents use the LLM client for content generation with template fallback when no LLM is configured.
 
-### Writing Agent
-Document and content creation.
-- Multiple formats (docs, email, reports)
-- Tone adaptation
-- Edit and refine
+## Memory
 
-### Planning Agent
-Task management and scheduling.
-- Goal breakdown
-- Dependency tracking
-- Progress monitoring
+Dual-layer architecture with fastembed local embeddings:
 
-### Review Agent
-Code review and quality analysis.
-- Security scanning
-- Style checking
-- Improvement suggestions
+- **Working memory** -- Recent messages, active task context, session state
+- **Persistent memory (LanceDB)** -- Vector embeddings for semantic search, full-text search, hybrid retrieval (70% vector / 30% keyword)
 
-### Testing Agent
-Test execution and coverage.
-- Run test suites
-- Generate test cases
-- Coverage analysis
-
-## Memory System
-
-Dual-layer architecture:
-
-**Hot Path (Working Memory)**
-- Recent messages
-- Active task context
-- Session state
-
-**Cold Path (LanceDB)**
-- Vector embeddings for semantic search
-- Full-text search
-- Hybrid retrieval (70% vector, 30% keyword)
-
-## Protocols
-
-- **MCP (Model Context Protocol)**: Tool integration between coordinator and agents
-- **A2A (Agent-to-Agent)**: Inter-agent communication (future)
+Three memory types: Episodic (events), Semantic (facts), Procedural (patterns).
 
 ## Security
 
-Argus-Panoptes includes multiple layers of security hardening for safe deployment.
-
-### Authentication
-
-Set `PANOPTES_API_KEY` to enable bearer token authentication on all API endpoints (except `/health`):
-
-```bash
-export PANOPTES_API_KEY="your-secret-key-here"
-```
-
-Requests must include the header: `Authorization: Bearer <key>`. Without `PANOPTES_API_KEY`, the server runs unauthenticated (suitable for local development only).
-
-### Network Binding
-
-The server binds to `127.0.0.1` (localhost only) by default. To expose externally:
-
-```bash
-# Via environment variable
-export PANOPTES_BIND_ADDR=0.0.0.0
-
-# Via CLI flag (overrides env var)
-panoptes-api --bind 0.0.0.0
-```
-
-A warning is logged when binding to `0.0.0.0`. Always use authentication and a firewall when exposing to the network.
-
-### CORS
-
-CORS is restricted to localhost origins by default. Configure with:
-
-```bash
-# Specific origins (comma-separated)
-export PANOPTES_CORS_ORIGINS="https://app.example.com,https://admin.example.com"
-
-# Wildcard (development only)
-export PANOPTES_CORS_ORIGINS="*"
-```
-
-### Docker
-
-Production Docker containers are hardened with:
-- `read_only: true` filesystem
-- `cap_drop: ALL` (only `SYS_PTRACE` added for PTY service)
-- `security_opt: no-new-privileges:true`
-- No Docker socket mount
-- No privileged mode
-- `tmpfs` for `/tmp` and `/run`
-
-### Working Directory Restrictions
-
-The `allowed_base_dirs` configuration restricts which directories agents can operate in:
-
-```toml
-# In config.toml
-allowed_base_dirs = ["/home/user/projects", "/opt/workspace"]
-```
-
-An empty list (default) allows all directories. Paths containing `..` are always rejected.
-
-### Permission Modes
-
-- **Plan** (default): Agents ask for confirmation before making changes
-- **Act**: Agents proceed without confirmation (only available via authenticated API requests)
-
-Keyword-based triage always uses Plan mode. Act mode cannot be triggered by user input content — it must be explicitly requested via the `permission_mode` API field.
-
-### Rate Limiting
-
-All endpoints enforce per-IP rate limiting:
-- 100 requests per minute (configurable)
-- 50 concurrent connections per IP
-- 10 WebSocket connections per IP
-- 1 MB max request body size
-- 64 KB max WebSocket message size
-
-### Command Whitelist & Argument Validation
-
-PTY sessions only allow whitelisted commands (`claude`, `cargo`, `git`, `python`, etc.). Commands with dangerous flags are blocked:
-
-| Command | Blocked Flags |
-|---------|--------------|
-| `python`/`python3` | `-c`, `-m` |
-| `node` | `-e`, `--eval` |
-| `deno` | `eval`, `-e` |
-| `bun` | `-e`, `--eval` |
-| `cargo` | `--config` |
-| `git` | `-c` |
-
-### Session Limits
-
-PTY sessions are capped at 32 concurrent sessions with a 1-hour TTL. Expired sessions are cleaned up automatically.
-
-### Trust Model
-
-| Boundary | Trust Level | Protection |
-|----------|-------------|------------|
-| External clients | Untrusted | Auth + rate limit + input validation |
-| LLM responses | Semi-trusted | Route whitelist + instruction sanitization |
-| Agent-to-agent | Semi-trusted | Output sanitization + size limits |
-| Internal code | Trusted | Type system + Rust safety |
+| Feature | Description |
+|---------|-------------|
+| API key auth | `PANOPTES_API_KEY` env var, bearer token on all endpoints except `/health` |
+| Rate limiting | 100 req/min, 50 concurrent connections, 10 WebSocket connections per IP |
+| CORS | Localhost-only default; configurable via `PANOPTES_CORS_ORIGINS` |
+| Network binding | `127.0.0.1` default; configurable via `PANOPTES_BIND_ADDR` |
+| Working dir validation | `allowed_base_dirs` config restricts agent filesystem access |
+| Permission modes | Plan (confirm changes) or Act (proceed directly, requires auth) |
+| PTY command whitelist | Only allowed commands; dangerous flags blocked |
+| Docker hardening | Read-only FS, dropped caps, no-new-privileges |
+| Session limits | 32 concurrent PTY sessions, 1-hour TTL |
 
 ### Environment Variables
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `PANOPTES_API_KEY` | Recommended | None (unauthenticated) | API authentication key |
-| `PANOPTES_BIND_ADDR` | No | `127.0.0.1` | Server bind address |
-| `PANOPTES_CORS_ORIGINS` | No | localhost only | CORS allowed origins (comma-separated) |
-| `OPENAI_API_KEY` | For ZeroClaw | None | OpenAI API key for LLM triage |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PANOPTES_API_KEY` | None (unauthenticated) | API authentication |
+| `PANOPTES_BIND_ADDR` | `127.0.0.1` | Server bind address |
+| `PANOPTES_CORS_ORIGINS` | localhost only | CORS allowed origins |
+| `OPENAI_API_KEY` | None | OpenAI API key for ZeroClaw triage |
 
 ## Related Projects
 
-- [Argus](https://github.com/jtmcg3/argus) — Original PTY-based Claude CLI wrapper
-- [ZeroClaw](https://github.com/jtmcg3/zeroclaw) — Ultra-lightweight AI agent framework
-- [swarms-rs](https://github.com/The-Swarm-Corporation/swarms-rs) — Rust multi-agent orchestration
+- [Argus](https://github.com/jtmcg3/argus) -- Original PTY-based Claude CLI wrapper
+- [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) -- Ultra-lightweight AI agent framework
+- [swarms-rs](https://github.com/The-Swarm-Corporation/swarms-rs) -- Rust multi-agent orchestration
 
 ## License
 

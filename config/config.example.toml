@@ -1,75 +1,66 @@
 # Argus-Panoptes Configuration
-# Copy to config.toml and customize
+# Copy to config.toml and customize.
+# If this file contains API keys, restrict permissions: chmod 600 config.toml
 
+# --- Provider (ZeroClaw triage) ---
 [provider]
-# LLM provider for triage and coordination
-# Recommended: OpenAI for intelligent ZeroClaw triage
+# Used by the coordinator for request classification.
+# "openai" works for both OpenAI and Ollama (OpenAI-compatible API).
 provider_type = "openai"
-model = "gpt-4o"
-api_url = "https://api.openai.com/v1"
+model = "lfm2:24b"
+api_url = "http://localhost:11434"
 timeout_ms = 30000
-# api_key = "sk-..."  # Or set OPENAI_API_KEY environment variable
+# api_key = "sk-..."  # Or set OPENAI_API_KEY env var. Not needed for Ollama.
 
-# Alternative: Local Ollama (no API key required, uses keyword fallback)
-# provider_type = "ollama"
-# model = "llama3.2"
-# api_url = "http://localhost:11434"
+# --- LLM (agent reasoning) ---
+[llm]
+# Powers agent responses (research, writing, planning, review, testing).
+# Providers: "openai" (also for Ollama), "anthropic"
+provider = "openai"
+model = "lfm2:24b"
+api_url = "http://localhost:11434"
+max_concurrent_requests = 2
+# api_key = ""  # Not needed for Ollama
 
-[agents.coding]
-# Coding agent configuration
-agent_type = "pty-mcp"
-transport = "stdio"
-command = "pty-mcp-server"
-capabilities = ["code_generation", "code_execution"]
-requires_confirmation = true
+# Alternative: Anthropic (requires API key)
+# provider = "anthropic"
+# model = "claude-sonnet-4-20250514"
+# api_key = "sk-ant-..."  # Or set ANTHROPIC_API_KEY env var
 
-[agents.research]
-# Research agent configuration
-agent_type = "swarm"
-transport = "stdio"
-capabilities = ["web_search", "document_analysis"]
+[llm.retry]
+max_retries = 3
+initial_delay_ms = 500
+max_delay_ms = 30000
+backoff_multiplier = 2.0
 
-[agents.writing]
-# Writing agent configuration
-agent_type = "swarm"
-transport = "stdio"
-capabilities = ["content_creation"]
-
-[agents.planning]
-# Planning agent configuration
-agent_type = "swarm"
-transport = "stdio"
-capabilities = ["task_planning"]
-
-[agents.review]
-# Code review agent configuration
-agent_type = "swarm"
-transport = "stdio"
-capabilities = ["code_review"]
-
-[agents.testing]
-# Testing agent configuration
-agent_type = "pty-mcp"
-transport = "stdio"
-command = "pty-mcp-server"
-capabilities = ["test_execution", "code_execution"]
-
+# --- Memory (LanceDB) ---
 [memory]
-# LanceDB memory configuration
 db_path = "./data/memory"
-embedding_model = "all-MiniLM-L6-v2"
+embedding_model = "all-MiniLM-L6-v2"   # 384-dim, downloaded on first run
 max_context_tokens = 4096
 
-[memory.working]
-# Working memory settings
-size = 20  # Max items in hot memory
+# --- Agents (optional) ---
+# Agent configuration is optional. When omitted, all agents are registered
+# with default settings. Uncomment and customize if needed.
+#
+# [agents.coding]
+# agent_type = "pty-mcp"
+# transport = "stdio"
+# command = "pty-mcp-server"
+# capabilities = ["code_generation", "code_execution"]
+# requires_confirmation = true
+#
+# [agents.research]
+# agent_type = "swarm"
+# transport = "stdio"
+# capabilities = ["web_search", "document_analysis"]
 
-# Security: Restrict working directories (SEC-010)
-# Requests with working_dir outside these paths will be rejected.
-# Empty list = allow all (dev mode, not recommended for production).
+# --- Security (optional) ---
+# Restrict working directories for PTY agents (SEC-010).
+# Empty list = allow all (dev mode). Not recommended for production.
 # allowed_base_dirs = ["/home/user/projects"]
 
-# Directory mappings for project resolution
-[directories]
-argus = "/home/user/projects/argus"
-panoptes = "/home/user/projects/argus-panoptes"
+# --- Directory mappings (optional) ---
+# [directories]
+# argus = "/home/user/projects/argus"
+# panoptes = "/home/user/projects/argus-panoptes"
