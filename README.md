@@ -49,6 +49,7 @@ Argus-Panoptes is a Rust-native AI agent swarm that coordinates specialist agent
 
 - Rust 1.87+ (2024 edition)
 - Ollama (for local LLM inference)
+- SearXNG (for research agent web search -- [install](https://docs.searxng.org/admin/installation.html))
 - Docker (optional, for containerized deployment)
 
 ### Build and Test
@@ -66,7 +67,7 @@ The API server auto-detects `config/default.toml`. Key sections:
 
 ```toml
 [provider]
-provider_type = "openai"        # "openai" works for Ollama too
+provider_type = "ollama"
 model = "lfm2:24b"
 api_url = "http://localhost:11434"
 
@@ -75,6 +76,9 @@ provider = "openai"
 model = "lfm2:24b"
 api_url = "http://localhost:11434"
 max_concurrent_requests = 2
+
+[search]
+url = "http://localhost:8888"    # SearXNG instance for research agent
 
 [memory]
 db_path = "./data/memory"
@@ -119,7 +123,7 @@ docker-compose -f docker/docker-compose.yml up -d
 ## Agents
 
 - **Coding** -- PTY-MCP sessions with Claude CLI, persistent terminals, y/N handling
-- **Research** -- Web search, query decomposition, source synthesis
+- **Research** -- Web search (SearXNG), query decomposition, source synthesis
 - **Writing** -- Docs, email, reports with tone adaptation
 - **Planning** -- Goal breakdown, dependency tracking, progress monitoring
 - **Review** -- Security scanning, style checking, improvement suggestions

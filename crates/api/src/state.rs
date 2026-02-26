@@ -69,13 +69,21 @@ impl AgentRegistry {
     }
 
     /// Create a registry with LLM-enabled agents and optional memory.
-    pub fn with_llm(llm: Arc<dyn LlmClient>, memory: Option<Arc<MemoryStore>>) -> Self {
+    pub fn with_llm(
+        llm: Arc<dyn LlmClient>,
+        memory: Option<Arc<MemoryStore>>,
+        search_url: Option<String>,
+    ) -> Self {
+        let mut research = ResearchAgent::with_default_config();
+        if let Some(url) = search_url {
+            research = research.with_search_url(url);
+        }
         let research = if let Some(ref mem) = memory {
-            ResearchAgent::with_default_config()
+            research
                 .with_memory(Arc::clone(mem))
                 .with_llm(Arc::clone(&llm))
         } else {
-            ResearchAgent::with_default_config().with_llm(Arc::clone(&llm))
+            research.with_llm(Arc::clone(&llm))
         };
 
         Self {
@@ -97,8 +105,12 @@ impl AgentRegistry {
     }
 
     /// Create a registry with memory-enabled research agent.
-    pub fn with_memory(memory_store: Arc<MemoryStore>) -> Self {
-        let research = ResearchAgent::with_default_config().with_memory(Arc::clone(&memory_store));
+    pub fn with_memory(memory_store: Arc<MemoryStore>, search_url: Option<String>) -> Self {
+        let mut research = ResearchAgent::with_default_config();
+        if let Some(url) = search_url {
+            research = research.with_search_url(url);
+        }
+        let research = research.with_memory(Arc::clone(&memory_store));
 
         Self {
             coding: Some(Arc::new(CodingAgent::with_default_config())),
@@ -182,6 +194,7 @@ impl AppState {
     pub async fn with_memory(
         config: CoordinatorConfig,
         memory_config: MemoryConfig,
+        search_url: Option<String>,
     ) -> anyhow::Result<Self> {
         let mut coordinator = Coordinator::new(config)?;
 
@@ -198,7 +211,7 @@ impl AppState {
         info!("Embedding model ready");
 
         // Create agents with shared memory and wire into coordinator
-        let agents = AgentRegistry::with_memory(Arc::clone(&memory_store));
+        let agents = AgentRegistry::with_memory(Arc::clone(&memory_store), search_url);
         Self::wire_agents(&mut coordinator, &agents);
 
         Ok(Self {
@@ -216,6 +229,7 @@ impl AppState {
         config: CoordinatorConfig,
         llm_config: LlmConfig,
         memory_config: Option<MemoryConfig>,
+        search_url: Option<String>,
     ) -> anyhow::Result<Self> {
         let mut coordinator = Coordinator::new(config)?;
 
@@ -227,11 +241,11 @@ impl AppState {
             let store = Arc::new(MemoryStore::new(mem_config).await?);
             store.warmup().await?;
             (
-                AgentRegistry::with_llm(llm_client, Some(Arc::clone(&store))),
+                AgentRegistry::with_llm(llm_client, Some(Arc::clone(&store)), search_url),
                 Some(store),
             )
         } else {
-            (AgentRegistry::with_llm(llm_client, None), None)
+            (AgentRegistry::with_llm(llm_client, None, search_url), None)
         };
 
         Self::wire_agents(&mut coordinator, &agents);

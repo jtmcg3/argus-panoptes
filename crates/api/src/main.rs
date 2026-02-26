@@ -150,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let (config, llm_config) = if let Some(ref path) = resolved_config_path {
+    let (config, llm_config, search_url) = if let Some(ref path) = resolved_config_path {
         tracing::info!(path = %path, "Loading configuration");
         let coordinator = CoordinatorConfig::from_file(path)?;
 
@@ -182,10 +182,24 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
-        (coordinator, llm)
+        // Parse optional [search] section
+        let search_url = {
+            let raw = std::fs::read_to_string(path)?;
+            let table: toml::Table = toml::from_str(&raw)?;
+            table
+                .get("search")
+                .and_then(|s| s.get("url"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        };
+        if let Some(ref url) = search_url {
+            tracing::info!(url = %url, "SearXNG search configured");
+        }
+
+        (coordinator, llm, search_url)
     } else {
         tracing::info!("Using default configuration (no config file)");
-        (CoordinatorConfig::default(), None)
+        (CoordinatorConfig::default(), None, None)
     };
 
     // Build memory config: --memory-path flag > config file [memory] section > default
@@ -225,17 +239,17 @@ async fn main() -> anyhow::Result<()> {
                 db_path = %mem_cfg.db_path.display(),
                 "Initializing with LLM + memory"
             );
-            AppState::with_llm(config, llm_cfg, Some(mem_cfg)).await?
+            AppState::with_llm(config, llm_cfg, Some(mem_cfg), search_url).await?
         } else {
             tracing::info!("Initializing with LLM (no memory)");
-            AppState::with_llm(config, llm_cfg, None).await?
+            AppState::with_llm(config, llm_cfg, None, search_url).await?
         }
     } else if let Some(mem_cfg) = memory_config {
         tracing::info!(
             db_path = %mem_cfg.db_path.display(),
             "Initializing with memory enabled"
         );
-        AppState::with_memory(config, mem_cfg).await?
+        AppState::with_memory(config, mem_cfg, search_url).await?
     } else {
         tracing::info!("Starting in template-only mode (no LLM, no memory)");
         AppState::new(config)?

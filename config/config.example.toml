@@ -33,6 +33,14 @@ initial_delay_ms = 500
 max_delay_ms = 30000
 backoff_multiplier = 2.0
 
+# --- Search (SearXNG) ---
+# SearXNG instance URL for the research agent's web search.
+# If not set, falls back to DuckDuckGo instant answers (limited).
+# Deploy SearXNG: https://docs.searxng.org/admin/installation.html
+[search]
+url = "http://localhost:8888"
+max_results = 5
+
 # --- Memory (LanceDB) ---
 [memory]
 db_path = "./data/memory"

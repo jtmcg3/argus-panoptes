@@ -16,8 +16,8 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -49,6 +49,11 @@ pub struct ResearchConfig {
     pub persist_findings: bool,
     /// Minimum importance score for storing findings
     pub min_importance_for_storage: f32,
+    /// SearXNG instance URL for web search (e.g. "http://100.85.147.105:8888")
+    /// Falls back to DuckDuckGo instant answers API if not set.
+    pub search_url: Option<String>,
+    /// Maximum concurrent research tasks (queued via semaphore)
+    pub max_concurrent: usize,
 }
 
 impl Default for ResearchConfig {
@@ -60,6 +65,8 @@ impl Default for ResearchConfig {
             user_agent: "Argus-Panoptes/0.1 (Research Agent)".into(),
             persist_findings: true,
             min_importance_for_storage: 0.6,
+            search_url: None,
+            max_concurrent: 3,
         }
     }
 }
@@ -85,7 +92,7 @@ pub struct WebContent {
 pub struct ResearchAgent {
     config: AgentConfig,
     research_config: ResearchConfig,
-    busy: AtomicBool,
+    semaphore: Arc<Semaphore>,
     http_client: Client,
     /// Memory store for persisting and retrieving knowledge
     memory_store: Option<Arc<MemoryStore>>,
@@ -104,10 +111,12 @@ impl ResearchAgent {
             .build()
             .expect("Failed to create HTTP client");
 
+        let semaphore = Arc::new(Semaphore::new(research_config.max_concurrent));
+
         Self {
             config,
             research_config,
-            busy: AtomicBool::new(false),
+            semaphore,
             http_client,
             memory_store: None,
             memory_retriever: None,
@@ -133,6 +142,12 @@ impl ResearchAgent {
         let retriever = Arc::new(MemoryRetriever::new(Arc::clone(&store), 4096));
         self.memory_store = Some(store);
         self.memory_retriever = Some(retriever);
+        self
+    }
+
+    /// Set the SearXNG URL for web search.
+    pub fn with_search_url(mut self, url: String) -> Self {
+        self.research_config.search_url = Some(url);
         self
     }
 
@@ -251,11 +266,78 @@ impl ResearchAgent {
         }
     }
 
-    /// Perform a web search using DuckDuckGo instant answers API.
+    /// Perform a web search. Uses SearXNG if configured, falls back to DuckDuckGo.
     async fn web_search(&self, query: &str) -> Result<Vec<SearchResult>> {
         info!(agent = %self.id(), query = %query, "Performing web search");
 
-        // Use DuckDuckGo instant answer API (no API key required)
+        if let Some(ref search_url) = self.research_config.search_url {
+            self.searxng_search(search_url, query).await
+        } else {
+            self.duckduckgo_search(query).await
+        }
+    }
+
+    /// Search via SearXNG JSON API.
+    async fn searxng_search(&self, base_url: &str, query: &str) -> Result<Vec<SearchResult>> {
+        // SearXNG searches work best with concise queries, not full task descriptions.
+        // Trim to the first ~200 chars to avoid URL length issues and improve relevance.
+        let trimmed_query: String = query.chars().take(200).collect();
+        let url = format!(
+            "{}/search?q={}&format=json&categories=general",
+            base_url.trim_end_matches('/'),
+            urlencoding::encode(&trimmed_query)
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| PanoptesError::Agent(format!("SearXNG request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            warn!(
+                agent = %self.id(),
+                status = %response.status(),
+                "SearXNG returned error, falling back to DuckDuckGo"
+            );
+            return self.duckduckgo_search(query).await;
+        }
+
+        let data: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| PanoptesError::Agent(format!("Failed to parse SearXNG response: {}", e)))?;
+
+        let mut results = Vec::new();
+
+        if let Some(items) = data["results"].as_array() {
+            for item in items.iter().take(self.research_config.max_search_results) {
+                let title = item["title"].as_str().unwrap_or("").to_string();
+                let url = item["url"].as_str().unwrap_or("").to_string();
+                let snippet = item["content"].as_str().unwrap_or("").to_string();
+
+                if !title.is_empty() && !url.is_empty() {
+                    results.push(SearchResult {
+                        title,
+                        url,
+                        snippet,
+                    });
+                }
+            }
+        }
+
+        info!(
+            agent = %self.id(),
+            results = results.len(),
+            "SearXNG search completed"
+        );
+
+        Ok(results)
+    }
+
+    /// Fallback search via DuckDuckGo instant answers API.
+    async fn duckduckgo_search(&self, query: &str) -> Result<Vec<SearchResult>> {
         let url = format!(
             "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
             urlencoding::encode(query)
@@ -282,8 +364,6 @@ impl ResearchAgent {
 
         let mut results = Vec::new();
 
-        // Parse DuckDuckGo response
-        // Main abstract result
         if let Some(abstract_text) = data["AbstractText"].as_str()
             && !abstract_text.is_empty()
         {
@@ -294,7 +374,6 @@ impl ResearchAgent {
             });
         }
 
-        // Related topics
         if let Some(topics) = data["RelatedTopics"].as_array() {
             for topic in topics.iter().take(self.research_config.max_search_results) {
                 if let Some(text) = topic["Text"].as_str() {
@@ -312,9 +391,8 @@ impl ResearchAgent {
             }
         }
 
-        // If no results from instant answers, note it
         if results.is_empty() {
-            debug!(agent = %self.id(), "No instant answer results, will try direct fetch");
+            debug!(agent = %self.id(), "No DuckDuckGo instant answer results");
         }
 
         Ok(results)
@@ -620,23 +698,17 @@ impl Agent for ResearchAgent {
         info!(
             agent = %self.id(),
             task_id = %task.id,
+            available_permits = self.semaphore.available_permits(),
             "Processing research task"
         );
 
-        if self
-            .busy
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err(PanoptesError::Agent(format!(
-                "Agent {} is busy processing another task",
-                self.id()
-            )));
-        }
-        let result = self.execute_research(task).await;
-        self.busy.store(false, Ordering::SeqCst);
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| PanoptesError::Agent("Research semaphore closed".into()))?;
 
-        result
+        self.execute_research(task).await
     }
 
     async fn handle_message(&self, message: &AgentMessage) -> Result<AgentMessage> {
@@ -652,7 +724,7 @@ impl Agent for ResearchAgent {
     }
 
     fn is_available(&self) -> bool {
-        !self.busy.load(Ordering::SeqCst)
+        self.semaphore.available_permits() > 0
     }
 }
 

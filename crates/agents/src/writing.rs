@@ -23,8 +23,8 @@ const WRITING_SYSTEM_PROMPT: &str = r#"You are a professional writer and editor.
 4. Ensure proper grammar and formatting
 5. Create documentation, emails, reports, and other business writing
 
+IMPORTANT: Always use Markdown formatting (headings with #, bold with **, lists with -). Never use HTML tags.
 Focus on clarity and conciseness.
-Structure content with appropriate headings and formatting.
 Tailor the reading level to the intended audience.
 "#;
 

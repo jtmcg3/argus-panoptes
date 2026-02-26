@@ -19,6 +19,11 @@ initial_delay_ms = 500
 max_delay_ms = 30000
 backoff_multiplier = 2.0
 
+[search]
+# SearXNG instance for web search (research agent)
+url = "http://100.85.147.105:8888"
+max_results = 5
+
 [memory]
 db_path = "./data/memory"
 embedding_model = "all-MiniLM-L6-v2"

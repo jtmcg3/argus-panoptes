@@ -50,8 +50,9 @@ argus-panoptes/
 ## Config
 
 `config/default.toml` is auto-detected by the API server. Sections:
-- `[provider]` -- ZeroClaw triage provider settings
+- `[provider]` -- ZeroClaw triage provider settings (ollama or openai)
 - `[llm]` -- LLM client config (provider, model, api_url, retry, concurrency)
+- `[search]` -- SearXNG instance URL for research agent web search
 - `[memory]` -- LanceDB path, embedding model, token limits
 
 ## Key Patterns
