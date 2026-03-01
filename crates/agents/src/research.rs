@@ -587,6 +587,42 @@ impl ResearchAgent {
         summary
     }
 
+    /// Sanitize text to replace non-ASCII characters with ASCII equivalents.
+    ///
+    /// This prevents downstream consumers (e.g. ZeroClaw) from encountering
+    /// multibyte UTF-8 characters that can cause byte-indexing panics.
+    fn sanitize_unicode(text: &str) -> String {
+        text.chars()
+            .map(|c| {
+                if c.is_ascii() {
+                    c
+                } else {
+                    match c {
+                        // Common typographic replacements
+                        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{2039}' | '\u{203A}' => '\'',
+                        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{00AB}' | '\u{00BB}' => '"',
+                        '\u{2013}' | '\u{2014}' | '\u{2015}' => '-',
+                        '\u{2026}' => '.',
+                        '\u{2022}' | '\u{2023}' | '\u{25E6}' | '\u{2043}' | '\u{2219}' => '*',
+                        '\u{00A0}' => ' ', // non-breaking space
+                        '\u{2002}' | '\u{2003}' | '\u{2009}' => ' ', // em/en/thin space
+                        '\u{00B7}' => '.', // middle dot
+                        '\u{2192}' => '>', // right arrow
+                        '\u{2190}' => '<', // left arrow
+                        '\u{00D7}' => 'x', // multiplication sign
+                        '\u{00F7}' => '/', // division sign
+                        '\u{2264}' => '<', // less-than-or-equal (approximate)
+                        '\u{2265}' => '>', // greater-than-or-equal (approximate)
+                        '\u{00AE}' => ' ', // registered
+                        '\u{2122}' => ' ', // trademark
+                        '\u{00A9}' => ' ', // copyright
+                        _ => ' ', // replace all other non-ASCII with space
+                    }
+                }
+            })
+            .collect()
+    }
+
     /// Execute a research task.
     async fn execute_research(&self, task: &Task) -> Result<AgentMessage> {
         let query = &task.description;
@@ -633,6 +669,9 @@ impl ResearchAgent {
 
         // Step 4b: Enhance with LLM if available
         let summary = self.enhance_with_llm(&summary, task).await;
+
+        // Step 4c: Sanitize Unicode to prevent downstream byte-indexing panics
+        let summary = Self::sanitize_unicode(&summary);
 
         // Step 5: Store key findings in memory
         // Store each search result snippet as a semantic memory
@@ -812,6 +851,43 @@ mod tests {
 
         assert!(summary.contains("Prior Knowledge"));
         assert!(summary.contains("systems programming language"));
+    }
+
+    #[test]
+    fn test_sanitize_unicode() {
+        // Typographic quotes → ASCII
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("He said \u{201C}hello\u{201D}"),
+            "He said \"hello\""
+        );
+        // Smart apostrophes
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("it\u{2019}s"),
+            "it's"
+        );
+        // Em dash
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("foo\u{2014}bar"),
+            "foo-bar"
+        );
+        // Non-breaking space
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("hello\u{00A0}world"),
+            "hello world"
+        );
+        // Georgian characters (the ones causing ZeroClaw panic)
+        let result = ResearchAgent::sanitize_unicode("test \u{10DA}\u{10D0} end");
+        assert!(result.is_ascii(), "Georgian chars should be replaced");
+        // Bullets
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("\u{2022} item"),
+            "* item"
+        );
+        // Pure ASCII passes through unchanged
+        assert_eq!(
+            ResearchAgent::sanitize_unicode("hello world 123!"),
+            "hello world 123!"
+        );
     }
 
     #[test]
