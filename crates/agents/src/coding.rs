@@ -4,12 +4,12 @@
 //! the full lifecycle: spawning, streaming output, handling confirmation
 //! prompts, and collecting results.
 
+use crate::pty_client::{PtyMcpClient, StatusResult};
 use crate::pty_tool::{PtyTool, PtyToolOutput};
 use crate::traits::{Agent, AgentCapability, AgentConfig};
 use async_trait::async_trait;
+use panoptes_common::PermissionMode;
 use panoptes_common::{AgentMessage, PanoptesError, Result, Task};
-use panoptes_coordinator::pty_client::{PtyMcpClient, StatusResult};
-use panoptes_coordinator::routing::PermissionMode;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn test_with_pty_tool() {
         use crate::pty_tool::{PtyTool, PtyToolOutput};
-        use panoptes_coordinator::routing::PermissionMode;
+        use panoptes_common::PermissionMode;
 
         struct FakeTool;
 
@@ -665,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_task_with_pty_tool() {
         use crate::pty_tool::{PtyTool, PtyToolOutput};
-        use panoptes_coordinator::routing::PermissionMode;
+        use panoptes_common::PermissionMode;
 
         struct EchoTool;
 
@@ -703,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_task_with_pty_tool_and_context() {
         use crate::pty_tool::{PtyTool, PtyToolOutput};
-        use panoptes_coordinator::routing::PermissionMode;
+        use panoptes_common::PermissionMode;
         use std::sync::Mutex;
 
         struct CaptureTool {

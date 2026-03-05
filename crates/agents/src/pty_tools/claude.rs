@@ -5,11 +5,11 @@
 //! a standalone, reusable component.
 
 use crate::coding::ConfirmationPolicy;
+use crate::pty_client::PtyMcpClient;
 use crate::pty_tool::{PtyTool, PtyToolOutput};
 use async_trait::async_trait;
+use panoptes_common::PermissionMode;
 use panoptes_common::{PanoptesError, Result};
-use panoptes_coordinator::pty_client::PtyMcpClient;
-use panoptes_coordinator::routing::PermissionMode;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

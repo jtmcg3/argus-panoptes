@@ -34,16 +34,17 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod a2a_bridge;
 pub mod coding;
 pub mod command;
 pub mod planning;
+pub mod pty_client;
 pub mod pty_tool;
 pub mod pty_tools;
 pub mod research;
 pub mod review;
 pub mod testing;
 pub mod traits;
-pub mod workflow;
 pub mod writing;
 
 pub use coding::{CodingAgent, ConfirmationPolicy};
@@ -54,5 +55,4 @@ pub use research::{ResearchAgent, ResearchConfig, SearchResult, WebContent};
 pub use review::ReviewAgent;
 pub use testing::TestingAgent;
 pub use traits::{Agent, AgentCapability, AgentConfig};
-pub use workflow::{ConcurrentWorkflow, SequentialWorkflow, StepResult, Workflow, WorkflowResult};
 pub use writing::WritingAgent;

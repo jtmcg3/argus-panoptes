@@ -1,108 +1,133 @@
 //! Configuration for the coordinator.
-//!
-//! # Security Features (SEC-005)
-//!
-//! - Config file permission validation on Unix systems
-//! - Rejects world-readable files containing API keys
-//! - Warns about API keys stored in config files
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::warn;
 
 /// Main coordinator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordinatorConfig {
-    /// ZeroClaw provider configuration
-    pub provider: ProviderConfig,
+    /// Coordinator port.
+    #[serde(default = "default_coordinator_port")]
+    pub port: u16,
 
-    /// Registered agents and their MCP endpoints
+    /// Agent URLs for discovery (coordinator fetches Agent Cards from these).
     #[serde(default)]
-    pub agents: HashMap<String, AgentConfig>,
+    pub agent_urls: Vec<String>,
 
-    /// Memory/LanceDB configuration
+    /// Triage LLM configuration.
+    #[serde(default)]
+    pub triage: TriageConfig,
+
+    /// LLM configuration for content generation.
+    #[serde(default)]
+    pub llm: LlmSection,
+
+    /// Memory/LanceDB configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
-
-    /// Default working directory
-    #[serde(default)]
-    pub default_working_dir: Option<PathBuf>,
-
-    /// Allowed base directories for working_dir validation (SEC-010).
-    /// Empty vec = allow all (dev mode fallback).
-    #[serde(default)]
-    pub allowed_base_dirs: Vec<PathBuf>,
 }
 
+fn default_coordinator_port() -> u16 {
+    8080
+}
+
+/// Triage LLM settings (replaces ZeroClaw provider config).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderConfig {
-    /// Provider type: "ollama", "openai", "anthropic"
-    pub provider_type: String,
+pub struct TriageConfig {
+    /// Provider type: "openai" (also works for Ollama), "anthropic"
+    #[serde(default = "default_triage_provider")]
+    pub provider: String,
 
     /// Model name
+    #[serde(default = "default_triage_model")]
     pub model: String,
 
-    /// API endpoint (for Ollama, OpenAI-compatible endpoints)
-    #[serde(default = "default_ollama_url")]
+    /// API endpoint
+    #[serde(default = "default_triage_url")]
     pub api_url: String,
 
-    /// API key for authentication (OpenAI, Anthropic)
-    /// If not set, will attempt to read from environment variables:
-    /// - OPENAI_API_KEY for OpenAI
-    /// - ANTHROPIC_API_KEY for Anthropic
+    /// API key (optional, read from env if not set)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// Temperature for triage (low for consistent routing)
+    #[serde(default = "default_triage_temperature")]
+    pub temperature: f32,
 
     /// Timeout in milliseconds
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
 }
 
-fn default_ollama_url() -> String {
-    "http://localhost:11434".into()
+fn default_triage_provider() -> String {
+    "openai".into()
+}
+
+fn default_triage_model() -> String {
+    "lfm2:24b".into()
+}
+
+fn default_triage_url() -> String {
+    "http://host.orb.internal:11434".into()
+}
+
+fn default_triage_temperature() -> f32 {
+    0.3
 }
 
 fn default_timeout() -> u64 {
     30000
 }
 
+impl Default for TriageConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_triage_provider(),
+            model: default_triage_model(),
+            api_url: default_triage_url(),
+            api_key: None,
+            temperature: default_triage_temperature(),
+            timeout_ms: default_timeout(),
+        }
+    }
+}
+
+/// LLM section for agent content generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// Agent type: "pty-mcp", "swarm", "external"
-    pub agent_type: String,
+pub struct LlmSection {
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent_requests: usize,
+}
 
-    /// MCP transport: "stdio", "http", "socket"
-    pub transport: String,
+fn default_max_concurrent() -> usize {
+    2
+}
 
-    /// Command to spawn (for stdio transport)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-
-    /// HTTP endpoint (for http transport)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-
-    /// Agent capabilities (for routing decisions)
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-
-    /// Whether this agent requires confirmation for actions
-    #[serde(default)]
-    pub requires_confirmation: bool,
+impl Default for LlmSection {
+    fn default() -> Self {
+        Self {
+            provider: "openai".into(),
+            model: "lfm2:24b".into(),
+            api_url: Some("http://host.orb.internal:11434".into()),
+            api_key: None,
+            max_concurrent_requests: 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
-    /// Path to LanceDB database
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
-
-    /// Embedding model to use
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
-
-    /// Maximum context tokens to include from memory
     #[serde(default = "default_max_context")]
     pub max_context_tokens: usize,
 }
@@ -132,68 +157,45 @@ fn default_max_context() -> usize {
 impl Default for CoordinatorConfig {
     fn default() -> Self {
         Self {
-            provider: ProviderConfig {
-                provider_type: "ollama".into(),
-                model: "llama3.2".into(),
-                api_url: default_ollama_url(),
-                api_key: None,
-                timeout_ms: default_timeout(),
-            },
-            agents: HashMap::new(),
+            port: default_coordinator_port(),
+            agent_urls: vec![
+                "http://localhost:9001".into(),
+                "http://localhost:9002".into(),
+                "http://localhost:9003".into(),
+                "http://localhost:9004".into(),
+                "http://localhost:9005".into(),
+                "http://localhost:9006".into(),
+            ],
+            triage: TriageConfig::default(),
+            llm: LlmSection::default(),
             memory: MemoryConfig::default(),
-            default_working_dir: None,
-            allowed_base_dirs: Vec::new(),
         }
     }
 }
 
 impl CoordinatorConfig {
     /// Load configuration from a TOML file.
-    ///
-    /// # Security (SEC-005)
-    ///
-    /// On Unix systems, this function validates that:
-    /// - The file is a regular file (not a symlink)
-    /// - The file is not world-readable if it contains an API key
-    /// - Warns if API keys are stored in the config file
     pub fn from_file(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
 
-        // SEC-005: Validate file permissions on Unix
         #[cfg(unix)]
         validate_config_file_permissions(path)?;
 
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)?;
 
-        // SEC-005: Warn if API key is in config file
-        if config.provider.api_key.is_some() {
+        if config.triage.api_key.is_some() {
             warn!(
-                "API key found in config file '{}'. For better security, \
-                 use environment variables instead (OPENAI_API_KEY, ANTHROPIC_API_KEY).",
+                "API key found in config file '{}'. Use environment variables instead.",
                 path.display()
             );
         }
 
         Ok(config)
     }
-
-    /// Load configuration from a TOML file without permission checks.
-    ///
-    /// Use this only for testing or when you've already validated the file.
-    pub fn from_file_unchecked(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&content)?;
-        Ok(config)
-    }
 }
 
 /// Validate config file permissions on Unix systems (SEC-005).
-///
-/// Requirements:
-/// - File must be a regular file (not symlink, directory, etc.)
-/// - File must not be world-writable (mode & 0o002 == 0)
-/// - If file contains API key patterns, must not be world-readable
 #[cfg(unix)]
 fn validate_config_file_permissions(path: &std::path::Path) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -201,49 +203,38 @@ fn validate_config_file_permissions(path: &std::path::Path) -> anyhow::Result<()
     let metadata = std::fs::metadata(path)
         .map_err(|e| anyhow::anyhow!("Failed to read config file '{}': {}", path.display(), e))?;
 
-    // Must be a regular file
     if !metadata.is_file() {
-        anyhow::bail!(
-            "Config path '{}' is not a regular file. Symlinks and directories are not allowed.",
-            path.display()
-        );
+        anyhow::bail!("Config path '{}' is not a regular file.", path.display());
     }
 
     let mode = metadata.permissions().mode();
     let permission_bits = mode & 0o777;
 
-    // Must not be world-writable
     if permission_bits & 0o002 != 0 {
         anyhow::bail!(
-            "Config file '{}' is world-writable (mode {:04o}). \
-             This is a security risk. Fix with: chmod o-w {}",
+            "Config file '{}' is world-writable (mode {:04o}). Fix with: chmod o-w {}",
             path.display(),
             permission_bits,
             path.display()
         );
     }
 
-    // Check if file might contain sensitive data
     let content = std::fs::read_to_string(path).unwrap_or_default();
     let has_api_key =
         content.contains("api_key") && (content.contains("sk-") || content.contains("key ="));
 
-    // If contains API key, must not be world-readable
     if has_api_key && permission_bits & 0o004 != 0 {
         anyhow::bail!(
-            "Config file '{}' contains an API key but is world-readable (mode {:04o}). \
-             This is a security risk. Fix with: chmod 600 {}",
+            "Config file '{}' contains an API key but is world-readable (mode {:04o}). Fix with: chmod 600 {}",
             path.display(),
             permission_bits,
             path.display()
         );
     }
 
-    // Warn about group-readable files with API keys
     if has_api_key && permission_bits & 0o040 != 0 {
         warn!(
-            "Config file '{}' contains an API key and is group-readable (mode {:04o}). \
-             Consider restricting access with: chmod 600 {}",
+            "Config file '{}' is group-readable with API key (mode {:04o}). Consider: chmod 600 {}",
             path.display(),
             permission_bits,
             path.display()
@@ -251,31 +242,4 @@ fn validate_config_file_permissions(path: &std::path::Path) -> anyhow::Result<()
     }
 
     Ok(())
-}
-
-impl ProviderConfig {
-    /// Resolve the API key from config or environment variables.
-    ///
-    /// Priority:
-    /// 1. Explicit api_key in config
-    /// 2. Environment variable based on provider_type:
-    ///    - "openai" -> OPENAI_API_KEY
-    ///    - "anthropic" -> ANTHROPIC_API_KEY
-    pub fn resolve_api_key(&self) -> Option<String> {
-        // First check explicit config
-        if let Some(ref key) = self.api_key
-            && !key.is_empty()
-        {
-            return Some(key.clone());
-        }
-
-        // Fall back to environment variable based on provider type
-        let env_var = match self.provider_type.as_str() {
-            "openai" => "OPENAI_API_KEY",
-            "anthropic" => "ANTHROPIC_API_KEY",
-            _ => return None,
-        };
-
-        std::env::var(env_var).ok()
-    }
 }

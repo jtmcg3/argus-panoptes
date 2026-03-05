@@ -1,11 +1,26 @@
-# Argus-Panoptes Default Configuration
+# Argus-Panoptes Configuration
 
-[provider]
-provider_type = "ollama"
+# --- Coordinator (root-level, read by CoordinatorConfig) ---
+port = 8080
+# Agent URLs for discovery (coordinator fetches Agent Cards from these)
+agent_urls = [
+    "http://localhost:9001",  # research
+    "http://localhost:9002",  # writing
+    "http://localhost:9003",  # planning
+    "http://localhost:9004",  # review
+    "http://localhost:9005",  # testing
+    "http://localhost:9006",  # coding
+]
+
+# --- Triage (LLM-based request routing) ---
+[triage]
+provider = "openai"           # "openai" (also works for Ollama) or "anthropic"
 model = "lfm2:24b"
 api_url = "http://host.orb.internal:11434"
+temperature = 0.3
 timeout_ms = 30000
 
+# --- LLM (for agent content generation) ---
 [llm]
 provider = "openai"
 model = "lfm2:24b"
@@ -19,11 +34,12 @@ initial_delay_ms = 500
 max_delay_ms = 30000
 backoff_multiplier = 2.0
 
+# --- Search (research agent) ---
 [search]
-# SearXNG instance for web search (research agent)
 url = "http://100.85.147.105:8888"
 max_results = 5
 
+# --- Memory (shared across agents that use it) ---
 [memory]
 db_path = "./data/memory"
 embedding_model = "all-MiniLM-L6-v2"

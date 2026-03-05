@@ -304,10 +304,9 @@ impl ResearchAgent {
             return self.duckduckgo_search(query).await;
         }
 
-        let data: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| PanoptesError::Agent(format!("Failed to parse SearXNG response: {}", e)))?;
+        let data: serde_json::Value = response.json().await.map_err(|e| {
+            PanoptesError::Agent(format!("Failed to parse SearXNG response: {}", e))
+        })?;
 
         let mut results = Vec::new();
 
@@ -616,7 +615,7 @@ impl ResearchAgent {
                         '\u{00AE}' => ' ', // registered
                         '\u{2122}' => ' ', // trademark
                         '\u{00A9}' => ' ', // copyright
-                        _ => ' ', // replace all other non-ASCII with space
+                        _ => ' ',          // replace all other non-ASCII with space
                     }
                 }
             })
@@ -861,15 +860,9 @@ mod tests {
             "He said \"hello\""
         );
         // Smart apostrophes
-        assert_eq!(
-            ResearchAgent::sanitize_unicode("it\u{2019}s"),
-            "it's"
-        );
+        assert_eq!(ResearchAgent::sanitize_unicode("it\u{2019}s"), "it's");
         // Em dash
-        assert_eq!(
-            ResearchAgent::sanitize_unicode("foo\u{2014}bar"),
-            "foo-bar"
-        );
+        assert_eq!(ResearchAgent::sanitize_unicode("foo\u{2014}bar"), "foo-bar");
         // Non-breaking space
         assert_eq!(
             ResearchAgent::sanitize_unicode("hello\u{00A0}world"),
@@ -879,10 +872,7 @@ mod tests {
         let result = ResearchAgent::sanitize_unicode("test \u{10DA}\u{10D0} end");
         assert!(result.is_ascii(), "Georgian chars should be replaced");
         // Bullets
-        assert_eq!(
-            ResearchAgent::sanitize_unicode("\u{2022} item"),
-            "* item"
-        );
+        assert_eq!(ResearchAgent::sanitize_unicode("\u{2022} item"), "* item");
         // Pure ASCII passes through unchanged
         assert_eq!(
             ResearchAgent::sanitize_unicode("hello world 123!"),

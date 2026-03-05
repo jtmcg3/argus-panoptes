@@ -1,0 +1,34 @@
+[package]
+name = "panoptes-a2a"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A2A protocol infrastructure for Argus-Panoptes agents"
+
+[dependencies]
+panoptes-common = { workspace = true }
+
+# HTTP server (custom JSON-RPC + Agent Card layer on axum 0.8)
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Concurrent task state
+dashmap = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# IDs and timestamps
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Logging and errors
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

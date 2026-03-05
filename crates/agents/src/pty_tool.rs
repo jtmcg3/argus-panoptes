@@ -5,8 +5,8 @@
 //! interchangeably by the [`CodingAgent`](crate::CodingAgent).
 
 use async_trait::async_trait;
+use panoptes_common::PermissionMode;
 use panoptes_common::Result;
-use panoptes_coordinator::routing::PermissionMode;
 use std::path::Path;
 
 /// Output from a PTY tool execution.
@@ -45,7 +45,7 @@ pub trait PtyTool: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use panoptes_coordinator::routing::PermissionMode;
+    use panoptes_common::PermissionMode;
     use std::path::PathBuf;
 
     /// A mock PtyTool for testing.

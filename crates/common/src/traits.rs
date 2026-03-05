@@ -98,6 +98,17 @@ fn default_max_tokens() -> usize {
     4096
 }
 
+/// Permission mode for coding agents.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    /// Review actions before execution
+    #[default]
+    Plan,
+    /// Execute immediately
+    Act,
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {

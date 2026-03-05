@@ -1,171 +1,154 @@
-//! Integration tests for the coordinator's triage, execute, and process pipeline.
+//! Integration tests for the coordinator's triage engine.
 //!
 //! These tests use keyword-based fallback (no LLM) so they work without Ollama.
 
-use panoptes_agents::{PlanningAgent, ResearchAgent, ReviewAgent, TestingAgent, WritingAgent};
-use panoptes_common::AgentMessage;
-use panoptes_coordinator::{AgentRoute, Coordinator, CoordinatorConfig};
+use panoptes_coordinator::triage::TriageEngine;
+use panoptes_llm::{LlmClient, LlmRequest, LlmResponse};
 use std::sync::Arc;
 
-/// Helper to create a coordinator with all specialist agents wired in.
-fn create_test_coordinator() -> Coordinator {
-    let config = CoordinatorConfig::default();
-    let mut coordinator = Coordinator::new(config).unwrap();
+/// Mock LLM client that returns a triage failure (to exercise keyword fallback).
+struct MockLlm;
 
-    coordinator.set_research_agent(
-        Arc::new(ResearchAgent::with_default_config()) as Arc<dyn panoptes_common::Agent>
-    );
-    coordinator.set_writing_agent(
-        Arc::new(WritingAgent::with_default_config()) as Arc<dyn panoptes_common::Agent>
-    );
-    coordinator.set_planning_agent(
-        Arc::new(PlanningAgent::with_default_config()) as Arc<dyn panoptes_common::Agent>
-    );
-    coordinator.set_review_agent(
-        Arc::new(ReviewAgent::with_default_config()) as Arc<dyn panoptes_common::Agent>
-    );
-    coordinator.set_testing_agent(
-        Arc::new(TestingAgent::with_default_config()) as Arc<dyn panoptes_common::Agent>
-    );
+#[async_trait::async_trait]
+impl LlmClient for MockLlm {
+    async fn complete(&self, _request: LlmRequest) -> panoptes_common::Result<LlmResponse> {
+        Err(panoptes_common::PanoptesError::Agent(
+            "Mock: no LLM available".into(),
+        ))
+    }
+    fn model_name(&self) -> &str {
+        "mock"
+    }
+}
 
-    coordinator
+fn create_triage_engine() -> TriageEngine {
+    TriageEngine::new(Arc::new(MockLlm))
 }
 
 // ============================================================================
-// Triage routing tests
+// Keyword triage routing tests
 // ============================================================================
 
-#[tokio::test]
-async fn test_triage_research_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Research the best practices for Rust error handling");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::Research { .. }));
+#[test]
+fn test_keyword_triage_research() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Research the best practices for Rust error handling")
+        .unwrap();
+    assert_eq!(decision.agent_name, "panoptes-research");
     assert!(decision.confidence > 0.5);
 }
 
-#[tokio::test]
-async fn test_triage_writing_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Write documentation for the auth module");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::Writing { .. }));
+#[test]
+fn test_keyword_triage_writing() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Write documentation for the auth module")
+        .unwrap();
+    assert_eq!(decision.agent_name, "panoptes-writing");
 }
 
-#[tokio::test]
-async fn test_triage_planning_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Plan my tasks for today");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::Planning { .. }));
+#[test]
+fn test_keyword_triage_planning() {
+    let engine = create_triage_engine();
+    let decision = engine.keyword_triage("Plan my tasks for today").unwrap();
+    assert_eq!(decision.agent_name, "panoptes-planning");
 }
 
-#[tokio::test]
-async fn test_triage_review_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Review the pull request for issues");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::CodeReview { .. }));
+#[test]
+fn test_keyword_triage_review() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Review the pull request for issues")
+        .unwrap();
+    assert_eq!(decision.agent_name, "panoptes-review");
 }
 
-#[tokio::test]
-async fn test_triage_testing_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Run tests and check coverage for the project");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::Testing { .. }));
+#[test]
+fn test_keyword_triage_testing() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Run tests and check coverage for the project")
+        .unwrap();
+    assert_eq!(decision.agent_name, "panoptes-testing");
 }
 
-#[tokio::test]
-async fn test_triage_coding_keyword() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Fix the bug in parser.rs");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::PtyCoding { .. }));
+#[test]
+fn test_keyword_triage_coding() {
+    let engine = create_triage_engine();
+    let decision = engine.keyword_triage("Fix the bug in parser.rs").unwrap();
+    assert_eq!(decision.agent_name, "panoptes-coding");
 }
 
-#[tokio::test]
-async fn test_triage_direct_response() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Hello there");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    assert!(matches!(decision.route, AgentRoute::Direct { .. }));
+#[test]
+fn test_keyword_triage_direct() {
+    let engine = create_triage_engine();
+    let decision = engine.keyword_triage("Hello there").unwrap();
+    assert_eq!(decision.agent_name, "direct");
 }
 
 // ============================================================================
-// Execute tests
+// Compound pattern regression tests
 // ============================================================================
 
-#[tokio::test]
-async fn test_execute_writing_route() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Write an email to the team about the release");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    let result = coordinator.execute(decision).await.unwrap();
-    assert!(!result.content.is_empty());
-    // Writing agent should produce template-based output containing Email
-    assert!(
-        result.content.contains("Email")
-            || result.content.contains("email")
-            || result.content.len() > 50,
-        "Expected email-related content, got: {}",
-        &result.content[..result.content.len().min(200)]
+#[test]
+fn test_keyword_triage_code_review_routes_to_review() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Please code review the auth module")
+        .unwrap();
+    assert_eq!(
+        decision.agent_name, "panoptes-review",
+        "'code review' must route to review, not coding"
     );
 }
 
-#[tokio::test]
-async fn test_execute_planning_route() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Plan my schedule for this week");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    let result = coordinator.execute(decision).await.unwrap();
-    assert!(!result.content.is_empty());
-    assert!(
-        result.content.contains("Plan")
-            || result.content.contains("plan")
-            || result.content.len() > 50,
-        "Expected planning content, got: {}",
-        &result.content[..result.content.len().min(200)]
+#[test]
+fn test_keyword_triage_review_code_routes_to_review() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Review my code for security issues")
+        .unwrap();
+    assert_eq!(
+        decision.agent_name, "panoptes-review",
+        "'review my code' must route to review, not coding"
     );
 }
 
-#[tokio::test]
-async fn test_execute_direct_route() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Hello there");
-    let decision = coordinator.triage(&msg).await.unwrap();
-    let result = coordinator.execute(decision).await.unwrap();
-    assert!(!result.content.is_empty());
-}
-
-// ============================================================================
-// End-to-end process tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_process_end_to_end() {
-    let coordinator = create_test_coordinator();
-    let msg = AgentMessage::user("Write a summary of the project status");
-    let result = coordinator.process(msg).await.unwrap();
-    assert!(!result.content.is_empty());
-}
-
-// ============================================================================
-// Graceful degradation tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_missing_agent_graceful() {
-    let config = CoordinatorConfig::default();
-    let coordinator = Coordinator::new(config).unwrap();
-    // No agents wired - should get a helpful message, not a crash
-    let msg = AgentMessage::user("Research Rust async");
-    let result = coordinator.process(msg).await.unwrap();
-    assert!(
-        result.content.contains("not")
-            || result.content.contains("unavailable")
-            || !result.content.is_empty(),
-        "Expected graceful error message, got: {}",
-        result.content
+#[test]
+fn test_keyword_triage_write_test_routes_to_testing() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Write a test for the parser module")
+        .unwrap();
+    assert_eq!(
+        decision.agent_name, "panoptes-testing",
+        "'write a test' must route to testing, not writing"
     );
+}
+
+#[test]
+fn test_keyword_triage_write_tests_routes_to_testing() {
+    let engine = create_triage_engine();
+    let decision = engine
+        .keyword_triage("Write tests for the API endpoints")
+        .unwrap();
+    assert_eq!(
+        decision.agent_name, "panoptes-testing",
+        "'write tests' must route to testing, not writing"
+    );
+}
+
+// ============================================================================
+// LLM triage fallback test
+// ============================================================================
+
+#[tokio::test]
+async fn test_triage_falls_back_to_keyword_on_llm_failure() {
+    let engine = create_triage_engine();
+    // LLM will fail (MockLlm returns error), so triage should fail
+    let result = engine.triage("Research Rust async").await;
+    // The triage method itself returns an error when LLM fails;
+    // the orchestrator handles the fallback to keyword triage
+    assert!(result.is_err());
 }

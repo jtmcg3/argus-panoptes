@@ -10,10 +10,9 @@ description = "Specialist agents for research, writing, planning, and coding"
 panoptes-common = { workspace = true }
 panoptes-memory = { workspace = true }
 panoptes-llm = { workspace = true }
-panoptes-coordinator = { workspace = true }
-
-# MCP client (for calling tools)
-rmcp = { workspace = true }
+panoptes-a2a = { workspace = true }
+# MCP client (for calling tools + PTY client)
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 
 # Async runtime
 tokio = { workspace = true }
@@ -26,6 +25,7 @@ serde_json = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -42,3 +42,30 @@ scraper = { workspace = true }
 
 # URL handling
 url = { workspace = true }
+
+# Configuration
+toml = { workspace = true }
+
+[[bin]]
+name = "panoptes-research"
+path = "src/bin/research.rs"
+
+[[bin]]
+name = "panoptes-writing"
+path = "src/bin/writing.rs"
+
+[[bin]]
+name = "panoptes-planning"
+path = "src/bin/planning.rs"
+
+[[bin]]
+name = "panoptes-review"
+path = "src/bin/review.rs"
+
+[[bin]]
+name = "panoptes-testing"
+path = "src/bin/testing.rs"
+
+[[bin]]
+name = "panoptes-coding"
+path = "src/bin/coding.rs"

@@ -6,8 +6,8 @@
 
 use crate::pty_tool::{PtyTool, PtyToolOutput};
 use async_trait::async_trait;
+use panoptes_common::PermissionMode;
 use panoptes_common::{PanoptesError, Result};
-use panoptes_coordinator::routing::PermissionMode;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;

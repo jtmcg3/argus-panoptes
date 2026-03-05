@@ -1,5 +1,1 @@
 # Local development overrides
-# Uncomment to use local zeroclaw fork instead of git dependency
-
-# [patch."https://github.com/zeroclaw-labs/zeroclaw.git"]
-# zeroclaw = { path = "../zeroclaw" }
