@@ -22,7 +22,12 @@ detect_coord_port() {
 
 COORD_PORT="$(detect_coord_port)"
 
-cargo build --workspace --release
+SKIP_BUILD="${SKIP_BUILD:-0}"
+if [[ "${SKIP_BUILD}" != "1" ]]; then
+  cargo build --workspace --release
+else
+  echo "Skipping build (SKIP_BUILD=1)"
+fi
 
 wait_for_health() {
   local name="$1"

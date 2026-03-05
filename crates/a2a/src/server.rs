@@ -352,9 +352,10 @@ fn build_sse_stream<A: A2aAgent>(
 
         // Forward progress events until the channel closes
         let mut result_rx = Some(result_rx);
+        let mut progress_closed = false;
         loop {
             tokio::select! {
-                progress = progress_rx.recv() => {
+                progress = progress_rx.recv(), if !progress_closed => {
                     match progress {
                         Ok(event) => {
                             let (event_name, status_msg) = match &event {
@@ -382,7 +383,11 @@ fn build_sse_stream<A: A2aAgent>(
                                 .json_data(&status_event)
                                 .unwrap_or_else(|_| Event::default()));
                         }
-                        Err(broadcast::error::RecvError::Closed) => break,
+                        // Agent dropped progress sender (usually after finishing).
+                        // Keep waiting for the final result so we can emit terminal status.
+                        Err(broadcast::error::RecvError::Closed) => {
+                            progress_closed = true;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!(lagged = n, "SSE consumer lagged, dropped events");
                         }
@@ -396,8 +401,8 @@ fn build_sse_stream<A: A2aAgent>(
                         std::future::pending::<Option<Result<Result<String, PanoptesError>, _>>>().await
                     }
                 } => {
-                    if let Some(Ok(agent_result)) = result {
-                        match agent_result {
+                    match result {
+                        Some(Ok(agent_result)) => match agent_result {
                             Ok(content) => {
                                 // Send artifact
                                 let artifact = Artifact {
@@ -457,7 +462,29 @@ fn build_sse_stream<A: A2aAgent>(
                                     .json_data(&failed)
                                     .unwrap_or_else(|_| Event::default()));
                             }
+                        },
+                        Some(Err(e)) => {
+                            error!(error = %e, "Agent result channel closed unexpectedly");
+                            let failed = TaskStatusUpdateEvent {
+                                task_id: task_id.clone(),
+                                status: TaskStatus {
+                                    state: TaskState::Failed,
+                                    message: Some("Agent task did not return a result".into()),
+                                    timestamp: Utc::now(),
+                                },
+                            };
+                            state.tasks.insert(task_id.clone(), Task {
+                                id: task_id.clone(),
+                                status: failed.status.clone(),
+                                messages: vec![original_message],
+                                artifacts: vec![],
+                            });
+                            yield Ok(Event::default()
+                                .event("status")
+                                .json_data(&failed)
+                                .unwrap_or_else(|_| Event::default()));
                         }
+                        None => {}
                     }
                     break;
                 }
