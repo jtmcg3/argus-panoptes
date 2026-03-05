@@ -2,30 +2,37 @@
 # Copy to config.toml and customize.
 # If this file contains API keys, restrict permissions: chmod 600 config.toml
 
-# --- Provider (ZeroClaw triage) ---
-[provider]
-# Used by the coordinator for request classification.
-# "openai" works for both OpenAI and Ollama (OpenAI-compatible API).
-provider_type = "openai"
+# --- Coordinator ---
+port = 18080
+agent_urls = [
+    "http://localhost:9001",  # research
+    "http://localhost:9002",  # writing
+    "http://localhost:9003",  # planning
+    "http://localhost:9004",  # review
+    "http://localhost:9005",  # testing
+    "http://localhost:9006",  # coding
+]
+
+# Optional timeout for coordinator -> agent HTTP calls.
+# Omit this key for no timeout (recommended for long-running streaming tasks).
+# delegate_timeout_ms = 300000
+
+# --- Triage (coordinator classification) ---
+[triage]
+# Providers: "openai" (also works for Ollama), "anthropic"
+provider = "openai"
 model = "lfm2:24b"
 api_url = "http://localhost:11434"
 timeout_ms = 30000
-# api_key = "sk-..."  # Or set OPENAI_API_KEY env var. Not needed for Ollama.
+# api_key = "sk-..."  # Or use OPENAI_API_KEY / ANTHROPIC_API_KEY env vars.
 
-# --- LLM (agent reasoning) ---
+# --- LLM (specialist agent generation) ---
 [llm]
-# Powers agent responses (research, writing, planning, review, testing).
-# Providers: "openai" (also for Ollama), "anthropic"
 provider = "openai"
 model = "lfm2:24b"
 api_url = "http://localhost:11434"
 max_concurrent_requests = 2
-# api_key = ""  # Not needed for Ollama
-
-# Alternative: Anthropic (requires API key)
-# provider = "anthropic"
-# model = "claude-sonnet-4-20250514"
-# api_key = "sk-ant-..."  # Or set ANTHROPIC_API_KEY env var
+# api_key = ""
 
 [llm.retry]
 max_retries = 3
@@ -33,42 +40,16 @@ initial_delay_ms = 500
 max_delay_ms = 30000
 backoff_multiplier = 2.0
 
-# --- Search (SearXNG) ---
-# SearXNG instance URL for the research agent's web search.
-# If not set, falls back to DuckDuckGo instant answers (limited).
-# Deploy SearXNG: https://docs.searxng.org/admin/installation.html
+# --- Search (research agent) ---
 [search]
 url = "http://localhost:8888"
 max_results = 5
 
-# --- Memory (LanceDB) ---
+# --- Memory (shared path) ---
 [memory]
 db_path = "./data/memory"
-embedding_model = "all-MiniLM-L6-v2"   # 384-dim, downloaded on first run
+embedding_model = "all-MiniLM-L6-v2"
 max_context_tokens = 4096
 
-# --- Agents (optional) ---
-# Agent configuration is optional. When omitted, all agents are registered
-# with default settings. Uncomment and customize if needed.
-#
-# [agents.coding]
-# agent_type = "pty-mcp"
-# transport = "stdio"
-# command = "pty-mcp-server"
-# capabilities = ["code_generation", "code_execution"]
-# requires_confirmation = true
-#
-# [agents.research]
-# agent_type = "swarm"
-# transport = "stdio"
-# capabilities = ["web_search", "document_analysis"]
-
-# --- Security (optional) ---
-# Restrict working directories for PTY agents (SEC-010).
-# Empty list = allow all (dev mode). Not recommended for production.
-# allowed_base_dirs = ["/home/user/projects"]
-
-# --- Directory mappings (optional) ---
-# [directories]
-# argus = "/home/user/projects/argus"
-# panoptes = "/home/user/projects/argus-panoptes"
+[memory.working]
+size = 20

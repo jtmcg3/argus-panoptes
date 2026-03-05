@@ -1,42 +1,46 @@
 # Development overrides for docker-compose
-# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
-#
-# SEC-014: Dev mode relaxes some security restrictions for development workflow.
+# Usage: docker-compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
+
+x-dev-service: &dev-service
+  build:
+    target: builder
+  volumes:
+    - ..:/app:cached
+    - cargo-cache:/usr/local/cargo/registry
+    - target-cache:/app/target
+  environment:
+    - RUST_BACKTRACE=1
+    - RUST_LOG=debug,panoptes=trace
+  read_only: false
 
 services:
-  api:
-    build:
-      target: builder  # Use builder stage for faster iteration
-    volumes:
-      - ..:/app:cached  # Mount source for hot reload
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/app/target
-    environment:
-      - RUST_BACKTRACE=1
-      - RUST_LOG=debug,panoptes=trace
-    # Dev overrides for security restrictions
-    read_only: false
-    command: ["cargo", "watch", "-x", "run"]
+  coordinator:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-coordinator"]
 
-  pty-mcp:
-    build:
-      target: builder
-    volumes:
-      - ..:/app:cached
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/app/target
-    environment:
-      - RUST_BACKTRACE=1
-    # Dev overrides for security restrictions
-    read_only: false
-    command: ["cargo", "watch", "-x", "run --bin pty-mcp-server"]
+  research:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-research"]
 
-  ollama:
-    # Use CPU-only for development on machines without GPU
-    deploy:
-      resources:
-        reservations:
-          devices: []
+  writing:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-writing"]
+
+  planning:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-planning"]
+
+  review:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-review"]
+
+  testing:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-testing"]
+
+  coding:
+    <<: *dev-service
+    command: ["cargo", "run", "--bin", "panoptes-coding"]
 
 volumes:
   cargo-cache:

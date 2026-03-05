@@ -2,55 +2,42 @@
 
 ## Prerequisites
 
-- **Rust** (stable, edition 2024) — install via [rustup](https://rustup.rs/)
-- **pkg-config** and **libssl-dev** (Linux) or equivalent OpenSSL headers
-- **protobuf-compiler** (`protoc`)
-- **Ollama** (optional) — for local LLM testing without an API key. Install from [ollama.com](https://ollama.com/), then `ollama pull lfm2:24b`
+- Rust stable (edition 2024)
+- `pkg-config` and OpenSSL headers (`libssl-dev` on Debian/Ubuntu)
+- `protoc` (`protobuf-compiler`)
+- Optional: Ollama for local model inference
 
-## Build Commands
+## Build and Validation
 
 ```bash
-cargo build              # Build all crates
-cargo test --workspace   # Run all tests
-cargo clippy --all-targets -- -D warnings  # Lint (must pass CI)
-cargo fmt --all          # Format code
+cargo build
+cargo test --workspace
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
-
-## Code Style
-
-- Run `cargo fmt` before committing — CI enforces `cargo fmt --all -- --check`.
-- All clippy warnings are treated as errors in CI (`-D warnings`).
-- Follow existing patterns: async-first (tokio), trait-based agents, serde for serialization.
-- Edition 2024 — do not downgrade.
-
-## Testing
-
-- Every new agent or module should include unit tests in a `#[cfg(test)] mod tests` block.
-- Use mock traits (e.g., `MockCommandRunner`) for external dependencies.
-- Run `cargo test --workspace` to verify nothing is broken.
-
-## Commit Conventions
-
-- Use conventional commit prefixes: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
-- Keep commits focused — one logical change per commit.
 
 ## Project Structure
 
-```
+```text
 crates/
-├── common/        # Shared types, traits (Agent, Task, AgentMessage)
-├── coordinator/   # ZeroClaw triage + routing
-├── agents/        # Specialist agents (coding, research, writing, etc.)
-├── memory/        # LanceDB vector memory
-├── llm/           # LLM client abstraction (OpenAI/Ollama, Anthropic)
-├── pty-mcp/       # PTY session management via MCP
-└── api/           # HTTP API gateway (binary: panoptes-api)
+├── a2a/           # Shared A2A server/protocol infrastructure
+├── coordinator/   # Triage + delegation orchestrator
+├── agents/        # Specialist agents + per-agent binaries
+├── llm/           # LLM abstraction
+├── memory/        # LanceDB memory
+├── pty-mcp/       # PTY MCP server
+└── common/        # Shared types/errors
 ```
 
-## Adding a New Agent
+## Adding or Updating an Agent
 
-1. Create `crates/agents/src/<name>.rs` following the `ResearchAgent` pattern.
-2. Implement the `Agent` trait from `panoptes_common::traits`.
-3. Add `pub mod <name>;` and re-exports in `crates/agents/src/lib.rs`.
-4. Register the agent in `crates/api/src/state.rs` (`AgentRegistry`).
-5. Wire routing in `crates/coordinator/src/triage.rs` (`Coordinator::execute`).
+1. Implement or update logic in `crates/agents/src/<agent>.rs`.
+2. Bridge A2A behavior in `crates/agents/src/a2a_bridge.rs`.
+3. Ensure binary wiring exists in `crates/agents/src/bin/<agent>.rs`.
+4. Verify triage routing in `crates/coordinator/src/triage.rs`.
+5. Add/adjust tests (unit + integration as needed).
+
+## Commit Guidance
+
+- Use focused commits with conventional prefixes (`feat:`, `fix:`, `docs:`, `test:`, etc.).
+- Keep behavior changes and documentation changes aligned in the same PR.

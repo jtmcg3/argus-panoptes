@@ -9,6 +9,7 @@ use panoptes_common::PanoptesError;
 use panoptes_coordinator::{AgentRegistry, CoordinatorConfig, Orchestrator};
 use panoptes_llm::{LlmConfig, build_llm_client};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::info;
 
@@ -86,7 +87,8 @@ async fn main() -> anyhow::Result<()> {
     info!(agents = registry.len(), "Agent discovery complete");
 
     // Build orchestrator
-    let orchestrator = Arc::new(Orchestrator::new(llm_client, registry));
+    let delegate_timeout = config.delegate_timeout_ms.map(Duration::from_millis);
+    let orchestrator = Arc::new(Orchestrator::new(llm_client, registry, delegate_timeout));
 
     let agent = CoordinatorAgent { orchestrator };
 

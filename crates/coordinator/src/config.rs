@@ -15,6 +15,11 @@ pub struct CoordinatorConfig {
     #[serde(default)]
     pub agent_urls: Vec<String>,
 
+    /// Optional timeout for coordinator -> agent HTTP calls.
+    /// `None` means no HTTP timeout (recommended for long-running streaming tasks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_timeout_ms: Option<u64>,
+
     /// Triage LLM configuration.
     #[serde(default)]
     pub triage: TriageConfig,
@@ -166,6 +171,7 @@ impl Default for CoordinatorConfig {
                 "http://localhost:9005".into(),
                 "http://localhost:9006".into(),
             ],
+            delegate_timeout_ms: None,
             triage: TriageConfig::default(),
             llm: LlmSection::default(),
             memory: MemoryConfig::default(),

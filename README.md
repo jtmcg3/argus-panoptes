@@ -1,173 +1,94 @@
 # Argus-Panoptes
 
-> The hundred-eyed guardian -- A multi-agent orchestration system built on ZeroClaw and swarms-rs.
-
-Argus-Panoptes is a Rust-native AI agent swarm that coordinates specialist agents for coding, research, writing, planning, code review, and testing. It uses ZeroClaw for triage/routing, swarms-rs for orchestration, LanceDB for vector memory, and an LLM abstraction layer supporting Ollama and OpenAI-compatible providers.
+Argus-Panoptes is a Rust multi-agent system built around A2A-style JSON-RPC + SSE.
+Each specialist agent runs as its own process, and a coordinator triages and delegates work.
 
 ## Architecture
 
-```
-                          ARGUS-PANOPTES
+- `panoptes-coordinator` (`:18080`) is the entrypoint.
+- Specialist agents run independently:
+  - `panoptes-research` (`:9001`)
+  - `panoptes-writing` (`:9002`)
+  - `panoptes-planning` (`:9003`)
+  - `panoptes-review` (`:9004`)
+  - `panoptes-testing` (`:9005`)
+  - `panoptes-coding` (`:9006`)
+- Shared services:
+  - `panoptes-llm` abstraction (OpenAI-compatible + Anthropic)
+  - `panoptes-memory` (LanceDB + fastembed)
+  - `panoptes-pty-mcp` (PTY tool server used by coding flows)
 
-  User Request
-       |
-       v
-  +-----------+       +-----------+
-  |  API      | ----> | ZeroClaw  |
-  |  Gateway  |       | Triage    |
-  +-----------+       +-----------+
-       |                    |
-       |         MCP (Model Context Protocol)
-       |                    |
-       v                    v
-  +------+------+------+------+------+------+
-  | Code | Rsrch| Write| Plan | Revw | Test |
-  +------+------+------+------+------+------+
-       |              |              |
-       v              v              v
-  +-----------+  +-----------+  +-----------+
-  |  LLM      |  |  Memory   |  |  PTY-MCP  |
-  |  Client   |  |  (LanceDB)|  |  Server   |
-  +-----------+  +-----------+  +-----------+
-```
+Each agent serves:
+- `GET /.well-known/agent.json`
+- `POST /` (JSON-RPC: `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`)
+- `GET /health`
 
-## Crates
+## Workspace Crates
 
-| Crate | Description |
-|-------|-------------|
-| `panoptes-api` | REST/WebSocket API gateway with auth, rate limiting, CORS |
-| `panoptes-coordinator` | ZeroClaw triage and workflow orchestration |
-| `panoptes-agents` | Specialist agents (coding, research, writing, planning, review, testing) |
-| `panoptes-llm` | LLM client abstraction (Anthropic, OpenAI/Ollama) with retry + semaphore |
-| `panoptes-memory` | LanceDB dual-layer memory with fastembed embeddings |
-| `panoptes-pty-mcp` | MCP server exposing PTY sessions for Claude CLI |
-| `panoptes-common` | Shared types and error handling |
+- `crates/a2a` - shared A2A server/protocol layer
+- `crates/coordinator` - triage + delegation orchestrator
+- `crates/agents` - specialist agent implementations + binaries
+- `crates/llm` - LLM client abstraction
+- `crates/memory` - LanceDB memory store
+- `crates/pty-mcp` - PTY MCP server
+- `crates/common` - shared types/errors
 
-## Quick Start
+## Prerequisites
 
-### Prerequisites
+- Rust 1.87+ (edition 2024)
+- Ollama or another OpenAI-compatible endpoint (optional but recommended)
+- SearXNG (optional, for richer research agent results)
 
-- Rust 1.87+ (2024 edition)
-- Ollama (for local LLM inference)
-- SearXNG (for research agent web search -- [install](https://docs.searxng.org/admin/installation.html))
-- Docker (optional, for containerized deployment)
-
-### Build and Test
+## Build and Test
 
 ```bash
-git clone https://github.com/jtmcg3/argus-panoptes
-cd argus-panoptes
 cargo build
-cargo test
+cargo test --workspace
 ```
 
-### Configure
+## Configuration
 
-The API server auto-detects `config/default.toml`. Key sections:
+Main config is `config/default.toml` (or set `PANOPTES_CONFIG`).
 
-```toml
-[provider]
-provider_type = "ollama"
-model = "lfm2:24b"
-api_url = "http://localhost:11434"
+Key sections:
+- root: `port`, `agent_urls`, optional `delegate_timeout_ms`
+- `[triage]` coordinator classifier model/provider settings
+- `[llm]` specialist agent model/provider settings
+- `[search]` research search endpoint
+- `[memory]` shared memory settings
 
-[llm]
-provider = "openai"
-model = "lfm2:24b"
-api_url = "http://localhost:11434"
-max_concurrent_requests = 2
+See `config/config.example.toml` for a complete template.
 
-[search]
-url = "http://localhost:8888"    # SearXNG instance for research agent
-
-[memory]
-db_path = "./data/memory"
-embedding_model = "all-MiniLM-L6-v2"
-```
-
-### Run
+## Run Locally
 
 ```bash
-# Start Ollama
-ollama serve
-ollama pull lfm2:24b    # or any compatible model
-
-# Run the API server
-cargo run --bin panoptes-api
-
-# Or with options
-cargo run --bin panoptes-api -- --port 8080 --memory
+# Build all binaries and start coordinator + all agents
+./start-agents.sh
 ```
 
-### Docker
+Or run binaries individually:
 
 ```bash
+cargo run --bin panoptes-coordinator
+cargo run --bin panoptes-research
+```
+
+## Quick Health Checks
+
+```bash
+curl http://localhost:18080/health
+curl http://localhost:9001/.well-known/agent.json
+```
+
+## Docker
+
+```bash
+# Production-like
+docker-compose -f docker/docker-compose.yml up -d
+
 # Development
 docker-compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
-
-# Production
-docker-compose -f docker/docker-compose.yml up -d
 ```
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check (no auth required) |
-| `POST` | `/api/v1/messages` | Coordinator triage + routing |
-| `GET` | `/api/v1/sessions/:id` | PTY session status |
-| `WS` | `/api/v1/ws` | WebSocket streaming |
-| `POST` | `/api/v1/{coding,research,writing,planning,review,testing}` | Direct agent access |
-| `POST` | `/api/v1/workflow` | Multi-agent workflows |
-
-## Agents
-
-- **Coding** -- PTY-MCP sessions with Claude CLI, persistent terminals, y/N handling
-- **Research** -- Web search (SearXNG), query decomposition, source synthesis
-- **Writing** -- Docs, email, reports with tone adaptation
-- **Planning** -- Goal breakdown, dependency tracking, progress monitoring
-- **Review** -- Security scanning, style checking, improvement suggestions
-- **Testing** -- Test suite execution, case generation, coverage analysis
-
-All agents use the LLM client for content generation with template fallback when no LLM is configured.
-
-## Memory
-
-Dual-layer architecture with fastembed local embeddings:
-
-- **Working memory** -- Recent messages, active task context, session state
-- **Persistent memory (LanceDB)** -- Vector embeddings for semantic search, full-text search, hybrid retrieval (70% vector / 30% keyword)
-
-Three memory types: Episodic (events), Semantic (facts), Procedural (patterns).
-
-## Security
-
-| Feature | Description |
-|---------|-------------|
-| API key auth | `PANOPTES_API_KEY` env var, bearer token on all endpoints except `/health` |
-| Rate limiting | 100 req/min, 50 concurrent connections, 10 WebSocket connections per IP |
-| CORS | Localhost-only default; configurable via `PANOPTES_CORS_ORIGINS` |
-| Network binding | `127.0.0.1` default; configurable via `PANOPTES_BIND_ADDR` |
-| Working dir validation | `allowed_base_dirs` config restricts agent filesystem access |
-| Permission modes | Plan (confirm changes) or Act (proceed directly, requires auth) |
-| PTY command whitelist | Only allowed commands; dangerous flags blocked |
-| Docker hardening | Read-only FS, dropped caps, no-new-privileges |
-| Session limits | 32 concurrent PTY sessions, 1-hour TTL |
-
-### Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PANOPTES_API_KEY` | None (unauthenticated) | API authentication |
-| `PANOPTES_BIND_ADDR` | `127.0.0.1` | Server bind address |
-| `PANOPTES_CORS_ORIGINS` | localhost only | CORS allowed origins |
-| `OPENAI_API_KEY` | None | OpenAI API key for ZeroClaw triage |
-
-## Related Projects
-
-- [Argus](https://github.com/jtmcg3/argus) -- Original PTY-based Claude CLI wrapper
-- [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) -- Ultra-lightweight AI agent framework
-- [swarms-rs](https://github.com/The-Swarm-Corporation/swarms-rs) -- Rust multi-agent orchestration
 
 ## License
 

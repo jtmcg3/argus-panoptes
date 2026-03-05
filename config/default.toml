@@ -1,7 +1,7 @@
 # Argus-Panoptes Configuration
 
 # --- Coordinator (root-level, read by CoordinatorConfig) ---
-port = 8080
+port = 18080
 # Agent URLs for discovery (coordinator fetches Agent Cards from these)
 agent_urls = [
     "http://localhost:9001",  # research
@@ -11,6 +11,9 @@ agent_urls = [
     "http://localhost:9005",  # testing
     "http://localhost:9006",  # coding
 ]
+# Optional timeout for coordinator -> agent HTTP calls.
+# Omit this setting for no timeout (recommended for long-running streaming tasks).
+# delegate_timeout_ms = 300000
 
 # --- Triage (LLM-based request routing) ---
 [triage]

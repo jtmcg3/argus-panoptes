@@ -127,8 +127,8 @@ cp config/config.example.toml config/config.toml
 # If adding API keys, restrict permissions:
 chmod 600 config/config.toml
 
-# Run the API server
-./target/release/panoptes-api --config config/config.toml --memory
+# Run all A2A services (coordinator + agents)
+./start-agents.sh
 ```
 
 > **Ollama from VM**: When running Ollama on the Mac host and the server inside an
@@ -386,7 +386,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
 # Build release binary
-RUN cargo build --release -p panoptes-api
+RUN cargo build --release --bin panoptes-coordinator
 
 # Runtime image
 FROM debian:bookworm-slim
@@ -399,13 +399,13 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user
 RUN useradd -r -s /bin/false appuser
 
-COPY --from=builder /app/target/release/panoptes-api /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-coordinator /usr/local/bin/
 
 USER appuser
 
 EXPOSE 8080
 
-CMD ["panoptes-api", "--config", "/app/config/config.toml", "--memory"]
+CMD ["panoptes-coordinator"]
 ```
 
 **PTY-MCP Server:**
@@ -634,7 +634,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/argus-panoptes
 Environment=RUST_LOG=info
 Environment=OLLAMA_HOST=http://localhost:11434
-ExecStart=/home/ubuntu/argus-panoptes/target/release/panoptes-api --config /home/ubuntu/argus-panoptes/config/config.toml --memory
+ExecStart=/home/ubuntu/argus-panoptes/target/release/panoptes-coordinator
 Restart=on-failure
 RestartSec=5
 
@@ -695,5 +695,6 @@ ls ~/OrbStack/machines/argus-vm/
 
 ## Changelog
 
-- **2026-02-24**: Updated binary name to panoptes-api, added config/security notes, Ollama host.orb.internal note
+- **2026-03-05**: Updated examples for A2A architecture (`panoptes-coordinator` + per-agent services)
+- **2026-02-24**: Updated binary naming and config/security notes
 - **2026-02-21**: Initial document created

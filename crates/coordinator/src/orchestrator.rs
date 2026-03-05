@@ -11,6 +11,7 @@ use panoptes_a2a::ProgressEvent;
 use panoptes_common::{PanoptesError, Result};
 use panoptes_llm::LlmClient;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -22,12 +23,20 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    pub fn new(llm_client: Arc<dyn LlmClient>, registry: AgentRegistry) -> Self {
+    pub fn new(
+        llm_client: Arc<dyn LlmClient>,
+        registry: AgentRegistry,
+        delegate_timeout: Option<Duration>,
+    ) -> Self {
+        let mut client_builder = reqwest::Client::builder();
+        if let Some(timeout) = delegate_timeout {
+            client_builder = client_builder.timeout(timeout);
+        }
+
         Self {
             triage: TriageEngine::new(llm_client),
             registry,
-            http_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
+            http_client: client_builder
                 .build()
                 .expect("Failed to create HTTP client"),
         }
@@ -220,8 +229,13 @@ impl Orchestrator {
         let mut stream = response.bytes_stream();
         let mut result_text = String::new();
         let mut buffer = String::new();
+        let mut task_done = false;
 
-        while let Some(chunk) = stream.next().await {
+        while !task_done {
+            let Some(chunk) = stream.next().await else {
+                break;
+            };
+
             let chunk =
                 chunk.map_err(|e| PanoptesError::Agent(format!("Stream read error: {}", e)))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
@@ -231,50 +245,41 @@ impl Orchestrator {
                 let event_block = buffer[..event_end].to_string();
                 buffer = buffer[event_end + 2..].to_string();
 
-                let mut event_type = String::new();
-                let mut data = String::new();
-                for line in event_block.lines() {
-                    if let Some(t) = line.strip_prefix("event: ") {
-                        event_type = t.to_string();
-                    } else if let Some(d) = line.strip_prefix("data: ") {
-                        data = d.to_string();
-                    }
-                }
-
+                let (event_type, data) = parse_sse_event_block(&event_block);
                 debug!(event_type = %event_type, "SSE event received");
 
                 match event_type.as_str() {
                     "status" => {
+                        let (state, detail) = parse_status_event(&data);
                         let _ = progress_tx.send(ProgressEvent::Phase {
                             name: "agent-status".into(),
-                            detail: data.clone(),
+                            detail,
                         });
-                    }
-                    "artifact" => {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                            if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                                result_text = text.to_string();
-                            } else if let Some(parts) = val.get("parts").and_then(|p| p.as_array())
-                            {
-                                for part in parts {
-                                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                        result_text.push_str(text);
-                                    }
-                                }
+
+                        match state.as_deref() {
+                            Some("completed") | Some("canceled") => {
+                                task_done = true;
+                                break;
                             }
+                            Some("failed") => {
+                                return Err(PanoptesError::Agent(format!(
+                                    "Agent task failed: {}",
+                                    data
+                                )));
+                            }
+                            _ => {}
                         }
                     }
-                    "completed" => {
-                        let _ = progress_tx.send(ProgressEvent::Phase {
-                            name: "completed".into(),
-                            detail: "Agent task completed".into(),
-                        });
-                        break;
+                    "artifact" => {
+                        extract_artifact_text(&data, &mut result_text);
                     }
-                    "failed" => {
-                        return Err(PanoptesError::Agent(format!("Agent task failed: {}", data)));
+                    "error" => {
+                        return Err(PanoptesError::Agent(format!(
+                            "Agent stream error: {}",
+                            data
+                        )));
                     }
-                    _ => {} // ignore unknown event types
+                    _ => {}
                 }
             }
         }
@@ -288,6 +293,57 @@ impl Orchestrator {
     /// Get a reference to the agent registry.
     pub fn registry(&self) -> &AgentRegistry {
         &self.registry
+    }
+}
+
+fn parse_sse_event_block(block: &str) -> (String, String) {
+    let mut event_type = String::new();
+    let mut data_lines = Vec::new();
+
+    for line in block.lines() {
+        if let Some(t) = line.strip_prefix("event: ") {
+            event_type = t.to_string();
+        } else if let Some(d) = line.strip_prefix("data: ") {
+            data_lines.push(d.to_string());
+        }
+    }
+
+    (event_type, data_lines.join("\n"))
+}
+
+fn parse_status_event(data: &str) -> (Option<String>, String) {
+    let value = match serde_json::from_str::<serde_json::Value>(data) {
+        Ok(v) => v,
+        Err(_) => return (None, data.to_string()),
+    };
+
+    let status = value.get("status");
+    let state = status
+        .and_then(|s| s.get("state"))
+        .and_then(|s| s.as_str())
+        .map(str::to_string);
+
+    let detail = status
+        .and_then(|s| s.get("message"))
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| data.to_string());
+
+    (state, detail)
+}
+
+fn extract_artifact_text(data: &str, result_text: &mut String) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return;
+    };
+
+    let artifact = value.get("artifact").unwrap_or(&value);
+    if let Some(parts) = artifact.get("parts").and_then(|p| p.as_array()) {
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                result_text.push_str(text);
+            }
+        }
     }
 }
 

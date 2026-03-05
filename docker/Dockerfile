@@ -19,12 +19,11 @@ COPY crates ./crates
 # Build release binaries
 RUN cargo build --release
 
-# Stage 2: Runtime (Ubuntu 24.04 LTS)
+# Stage 2: Runtime
 FROM ubuntu:24.04 AS runtime
 
 WORKDIR /app
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -37,21 +36,21 @@ RUN useradd -m -u 1000 panoptes \
     && chown -R panoptes:panoptes /app
 
 # Copy binaries from builder
+COPY --from=builder /app/target/release/panoptes-coordinator /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-research /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-writing /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-planning /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-review /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-testing /usr/local/bin/
+COPY --from=builder /app/target/release/panoptes-coding /usr/local/bin/
 COPY --from=builder /app/target/release/pty-mcp-server /usr/local/bin/
-COPY --from=builder /app/target/release/panoptes-api /usr/local/bin/
 
 USER panoptes
 
-# Environment defaults
 ENV RUST_LOG=info,panoptes=debug
-ENV PANOPTES_PORT=8080
+ENV PANOPTES_CONFIG=/app/config/default.toml
 
-# Expose API port
-EXPOSE 8080
+EXPOSE 18080 9001 9002 9003 9004 9005 9006
 
-# Default command (API server)
-CMD ["panoptes-api", "--port", "8080"]
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# Default entrypoint is the coordinator.
+CMD ["panoptes-coordinator"]
