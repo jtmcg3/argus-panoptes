@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use panoptes_common::PanoptesError;
 use panoptes_common::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::client::{LlmClient, LlmRequest, LlmResponse, Role, TokenUsage};
 
@@ -20,7 +21,16 @@ struct OpenAiRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct OpenAiMessage {
     role: String,
+    #[serde(default, deserialize_with = "deserialize_content")]
     content: String,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -40,6 +50,65 @@ struct OpenAiChoice {
 struct OpenAiUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
+}
+
+fn content_from_value(value: Value) -> String {
+    match value {
+        Value::String(s) => s,
+        Value::Null => String::new(),
+        Value::Array(items) => {
+            let mut chunks = Vec::new();
+            for item in items {
+                match item {
+                    Value::String(s) => {
+                        if !s.trim().is_empty() {
+                            chunks.push(s);
+                        }
+                    }
+                    Value::Object(map) => {
+                        if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                            if !text.trim().is_empty() {
+                                chunks.push(text.to_string());
+                            }
+                        } else if let Some(text) = map.get("content").and_then(|v| v.as_str()) {
+                            if !text.trim().is_empty() {
+                                chunks.push(text.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            chunks.join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
+fn deserialize_content<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(content_from_value(value))
+}
+
+fn resolve_message_content(message: &OpenAiMessage) -> String {
+    if !message.content.trim().is_empty() {
+        return message.content.clone();
+    }
+
+    [
+        message.reasoning_content.as_deref(),
+        message.reasoning.as_deref(),
+        message.thinking.as_deref(),
+        message.text.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|s| !s.trim().is_empty())
+    .map(str::to_string)
+    .unwrap_or_default()
 }
 
 pub struct OpenAiClient {
@@ -73,12 +142,20 @@ impl OpenAiClient {
             messages.push(OpenAiMessage {
                 role: "system".to_string(),
                 content: system.clone(),
+                reasoning_content: None,
+                reasoning: None,
+                thinking: None,
+                text: None,
             });
         }
         for msg in &request.messages {
             messages.push(OpenAiMessage {
                 role: Self::role_to_string(&msg.role).to_string(),
                 content: msg.content.clone(),
+                reasoning_content: None,
+                reasoning: None,
+                thinking: None,
+                text: None,
             });
         }
         messages
@@ -136,8 +213,16 @@ impl LlmClient for OpenAiClient {
             .next()
             .ok_or_else(|| PanoptesError::Agent("No choices in OpenAI response".to_string()))?;
 
+        let content = resolve_message_content(&choice.message);
+        if content.trim().is_empty() {
+            let finish_reason = choice.finish_reason.unwrap_or_else(|| "unknown".to_string());
+            return Err(PanoptesError::Agent(format!(
+                "OpenAI response contained empty assistant content (finish_reason={finish_reason})"
+            )));
+        }
+
         Ok(LlmResponse {
-            content: choice.message.content,
+            content,
             model: oai_response.model,
             usage: oai_response.usage.map(|u| TokenUsage {
                 prompt_tokens: u.prompt_tokens,
@@ -214,5 +299,27 @@ mod tests {
     fn default_base_url_is_ollama() {
         let client = OpenAiClient::new(None, "llama3".to_string(), None);
         assert_eq!(client.base_url, "http://host.orb.internal:11434");
+    }
+
+    #[test]
+    fn deserialize_content_from_array_parts() {
+        let value = serde_json::json!([
+            {"type":"text","text":"line1"},
+            {"type":"output_text","text":"line2"}
+        ]);
+        assert_eq!(content_from_value(value), "line1\nline2");
+    }
+
+    #[test]
+    fn resolve_message_content_falls_back_to_reasoning() {
+        let message = OpenAiMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            reasoning_content: Some("{\"route\":\"planning\"}".to_string()),
+            reasoning: None,
+            thinking: None,
+            text: None,
+        };
+        assert_eq!(resolve_message_content(&message), "{\"route\":\"planning\"}");
     }
 }

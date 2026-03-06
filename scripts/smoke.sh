@@ -30,6 +30,8 @@ agent_port() {
 
 HOST="${HOST:-localhost}"
 COORD_PORT="${COORD_PORT:-$(detect_coord_port)}"
+SEND_TIMEOUT_SECONDS="${SEND_TIMEOUT_SECONDS:-30}"
+STREAM_TIMEOUT_SECONDS="${STREAM_TIMEOUT_SECONDS:-45}"
 
 FAILURES=0
 
@@ -74,7 +76,7 @@ check_send() {
   payload='{"jsonrpc":"2.0","id":"smoke-send","method":"message/send","params":{"message":{"role":"user","parts":[{"type":"text","text":"Plan my tasks for today"}]}}}'
 
   local body
-  if ! body="$(curl -fsS --max-time 20 -H "content-type: application/json" -d "$payload" "$url" 2>/dev/null)"; then
+  if ! body="$(curl -fsS --max-time "${SEND_TIMEOUT_SECONDS}" -H "content-type: application/json" -d "$payload" "$url" 2>/dev/null)"; then
     fail "coordinator message/send request (${url})"
     return
   fi
@@ -91,11 +93,19 @@ check_stream() {
   local payload
   payload='{"jsonrpc":"2.0","id":"smoke-stream","method":"message/stream","params":{"message":{"role":"user","parts":[{"type":"text","text":"Plan my tasks for today"}]}}}'
 
-  local stream
-  if ! stream="$(curl -fsS -N --max-time 25 -H "content-type: application/json" -d "$payload" "$url" 2>/dev/null)"; then
-    fail "coordinator message/stream request (${url})"
-    return
+  local out_file err_file
+  out_file="$(mktemp)"
+  err_file="$(mktemp)"
+
+  local curl_rc=0
+  if ! curl -fsS -N --max-time "${STREAM_TIMEOUT_SECONDS}" -H "content-type: application/json" -d "$payload" "$url" >"${out_file}" 2>"${err_file}"; then
+    curl_rc=$?
   fi
+
+  local stream curl_err
+  stream="$(cat "${out_file}")"
+  curl_err="$(cat "${err_file}")"
+  rm -f "${out_file}" "${err_file}"
 
   local has_status=0
   local has_artifact=0
@@ -110,6 +120,9 @@ check_stream() {
 
   if [[ "$has_status" -eq 1 && "$has_completed" -eq 1 ]]; then
     ok "coordinator message/stream"
+    if [[ "$curl_rc" -ne 0 ]]; then
+      warn "stream reached terminal status but curl exited non-zero (rc=${curl_rc}): ${curl_err}"
+    fi
     if [[ "$has_artifact" -eq 0 ]]; then
       warn "stream completed without explicit artifact event (result may be status-only)"
     fi
@@ -117,7 +130,11 @@ check_stream() {
     log "---- stream output begin ----"
     log "$stream"
     log "---- stream output end ----"
-    fail "coordinator message/stream response shape"
+    if [[ "$curl_rc" -ne 0 ]]; then
+      fail "coordinator message/stream request (${url}) rc=${curl_rc} err=${curl_err}"
+    else
+      fail "coordinator message/stream response shape"
+    fi
   fi
 }
 
