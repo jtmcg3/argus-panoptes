@@ -43,3 +43,7 @@ tokio-stream = { workspace = true }
 [[bin]]
 name = "panoptes-coordinator"
 path = "src/bin/coordinator.rs"
+
+[[bin]]
+name = "panoptes-telegram"
+path = "src/bin/telegram.rs"

@@ -215,7 +215,9 @@ impl LlmClient for OpenAiClient {
 
         let content = resolve_message_content(&choice.message);
         if content.trim().is_empty() {
-            let finish_reason = choice.finish_reason.unwrap_or_else(|| "unknown".to_string());
+            let finish_reason = choice
+                .finish_reason
+                .unwrap_or_else(|| "unknown".to_string());
             return Err(PanoptesError::Agent(format!(
                 "OpenAI response contained empty assistant content (finish_reason={finish_reason})"
             )));
@@ -320,6 +322,9 @@ mod tests {
             thinking: None,
             text: None,
         };
-        assert_eq!(resolve_message_content(&message), "{\"route\":\"planning\"}");
+        assert_eq!(
+            resolve_message_content(&message),
+            "{\"route\":\"planning\"}"
+        );
     }
 }

@@ -26,6 +26,7 @@ async fn main() -> anyhow::Result<()> {
         },
         ResearchConfig {
             search_url: config.search_url.clone(),
+            max_search_results: config.search_max_results,
             ..ResearchConfig::default()
         },
     );
@@ -61,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
 struct AppConfig {
     model: String,
     search_url: Option<String>,
+    search_max_results: usize,
     llm_table: toml::Value,
     memory_table: toml::Value,
 }
@@ -106,6 +108,12 @@ fn load_config() -> AppConfig {
         .and_then(|v| v.get("url"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    let search_max_results = table
+        .get("search")
+        .and_then(|v| v.get("max_results"))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(5);
 
     let llm_table = table
         .get("llm")
@@ -120,6 +128,7 @@ fn load_config() -> AppConfig {
     AppConfig {
         model,
         search_url,
+        search_max_results,
         llm_table,
         memory_table,
     }

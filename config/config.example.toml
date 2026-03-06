@@ -53,3 +53,16 @@ max_context_tokens = 4096
 
 [memory.working]
 size = 20
+
+# --- Telegram Bridge (optional) ---
+[telegram]
+# Set token via env in production:
+# TELEGRAM_BOT_TOKEN="123456:ABCDEF..."
+bot_token = ""
+# Optional: override coordinator URL (defaults to http://localhost:<port>/)
+coordinator_url = "http://localhost:18080/"
+# Optional allowlist of chat IDs. Empty means allow all chats.
+allowed_chat_ids = []
+poll_timeout_seconds = 30
+poll_interval_ms = 1000
+coordinator_timeout_ms = 180000
